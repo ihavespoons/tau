@@ -11,11 +11,13 @@ import (
 	"time"
 
 	"github.com/ihavespoons/tau/agent"
+	"github.com/ihavespoons/tau/agent/env"
 	"github.com/ihavespoons/tau/agent/env/osenv"
 	"github.com/ihavespoons/tau/ai"
 	"github.com/ihavespoons/tau/ai/auth"
 	"github.com/ihavespoons/tau/ai/provider"
 	"github.com/ihavespoons/tau/config"
+	"github.com/ihavespoons/tau/extension"
 	"github.com/ihavespoons/tau/session"
 	"github.com/ihavespoons/tau/tools"
 )
@@ -30,6 +32,10 @@ type Options struct {
 	NoTools bool
 	// NoSession skips persistence (useful for one-shot runs).
 	NoSession bool
+	// Extensions are loaded before the session starts, in order.
+	Extensions []extension.Extension
+	// Mode is reported to extensions so they can degrade gracefully.
+	Mode extension.Mode
 	// Resume opens the most recent session for Cwd instead of creating one.
 	Resume bool
 	// SessionPath opens a specific session file.
@@ -43,9 +49,18 @@ type Session struct {
 	Model   *ai.Model
 	Session *session.Session
 	Path    string
+	// Extensions dispatches hooks; nil when no extensions are loaded.
+	Extensions *extension.Runner
 
-	repo session.Repo
+	// allTools is the full registered set, including tools an extension has
+	// deactivated — SetActiveTools selects from here.
+	allTools []agent.Tool
+	repo     session.Repo
 }
+
+// envExecOptions is the default shell configuration for extension-issued
+// commands.
+func envExecOptions() env.ExecOptions { return env.ExecOptions{Timeout: 2 * time.Minute} }
 
 // DefaultSystemPrompt is the P2 baseline. P3 replaces it with the full
 // builder (tool snippets, guidelines, AGENTS.md/CLAUDE.md context files).
@@ -141,6 +156,30 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 		}
 	}
 
+	// Load extensions, then let them contribute tools before the agent is
+	// built. A failing extension is reported but never blocks startup.
+	mode := opts.Mode
+	if mode == "" {
+		mode = extension.ModePrint
+	}
+	if len(opts.Extensions) > 0 {
+		cs.Extensions = extension.NewRunner(extension.RunnerOptions{
+			Mode: mode, Cwd: cwd, Trusted: true,
+		})
+		for _, e := range opts.Extensions {
+			_ = cs.Extensions.Load(e)
+		}
+		toolset = append(toolset, cs.Extensions.Tools()...)
+	}
+	cs.allTools = toolset
+
+	loopCfg := agent.LoopConfig{
+		ConvertToLLM: func(msgs []ai.Message) ([]ai.Message, error) {
+			return session.ConvertToLLM(msgs), nil
+		},
+	}
+	wireExtensions(&loopCfg, cs.Extensions)
+
 	cs.Agent = agent.NewAgent(agent.Options{
 		SystemPrompt:  systemPrompt,
 		Model:         model,
@@ -148,11 +187,7 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 		Tools:         toolset,
 		Messages:      restored,
 		Stream:        p.StreamSimple,
-		Config: agent.LoopConfig{
-			ConvertToLLM: func(msgs []ai.Message) ([]ai.Message, error) {
-				return session.ConvertToLLM(msgs), nil
-			},
-		},
+		Config:        loopCfg,
 	})
 
 	// Persist every message the loop produces.
@@ -160,7 +195,25 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 		cs.Agent.Subscribe(cs.persistSink)
 	}
 
+	if cs.Extensions != nil {
+		cs.Extensions.Bind(runtimeAdapter{cs})
+		cs.Extensions.SetSystemPrompt(systemPrompt)
+		if sink := extensionSink(cs.Extensions); sink != nil {
+			cs.Agent.Subscribe(sink)
+		}
+		cs.Extensions.EmitSessionStart(ctx, &extension.SessionStartEvent{
+			SessionPath: cs.Path, Cwd: cwd, Resumed: opts.Resume || opts.SessionPath != "",
+		})
+	}
+
 	return cs, nil
+}
+
+// Close emits session shutdown to extensions.
+func (s *Session) Close(ctx context.Context, reason string) {
+	if s.Extensions != nil {
+		s.Extensions.EmitSessionShutdown(ctx, &extension.SessionShutdownEvent{Reason: reason})
+	}
 }
 
 // DefaultModel is tau's default until settings land in P3.
