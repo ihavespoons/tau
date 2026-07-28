@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ihavespoons/tau/agent"
@@ -18,9 +19,12 @@ import (
 	"github.com/ihavespoons/tau/ai/provider"
 	"github.com/ihavespoons/tau/config"
 	"github.com/ihavespoons/tau/extension"
+	"github.com/ihavespoons/tau/models"
 	"github.com/ihavespoons/tau/prompt"
 	"github.com/ihavespoons/tau/session"
+	"github.com/ihavespoons/tau/settings"
 	"github.com/ihavespoons/tau/skills"
+	"github.com/ihavespoons/tau/slashcmd"
 	"github.com/ihavespoons/tau/tools"
 	"github.com/ihavespoons/tau/trust"
 )
@@ -49,6 +53,13 @@ type Options struct {
 	Resume bool
 	// SessionPath opens a specific session file.
 	SessionPath string
+	// UI is the host's interactive surface, handed to extensions and to the
+	// built-in commands that need to ask the user something. Nil is headless.
+	UI extension.UI
+	// Interactive supplies the built-in commands that need dialogs. The host
+	// may pass a value whose session pointer is filled in after New returns —
+	// nothing calls it during construction.
+	Interactive slashcmd.Interactive
 }
 
 // Session is a running coding agent bound to a persisted session file.
@@ -58,15 +69,30 @@ type Session struct {
 	Model   *ai.Model
 	Session *session.Session
 	Path    string
+	// Cwd is the directory the session is bound to.
+	Cwd string
 	// Extensions dispatches hooks; nil when no extensions are loaded.
 	Extensions *extension.Runner
 	// Trust records whether project-scoped resources were allowed to load.
 	Trust trust.Outcome
+	// Models is the composed provider catalog: built-ins plus models.json.
+	Models *models.Registry
+	// Settings is the merged global+project configuration.
+	Settings *settings.Resolved
+	// Commands is the slash-command registry for this session.
+	Commands *slashcmd.Registry
+	// UI is the host's interactive surface; never nil.
+	UI extension.UI
 
+	// mu guards allTools, which an extension may mutate from its own
+	// goroutine long after startup.
+	mu sync.Mutex
 	// allTools is the full registered set, including tools an extension has
 	// deactivated — SetActiveTools selects from here.
 	allTools []agent.Tool
 	repo     session.Repo
+	store    auth.CredentialStore
+	opts     Options
 }
 
 // envExecOptions is the default shell configuration for extension-issued
@@ -126,15 +152,24 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 		return nil, err
 	}
 
-	store := auth.NewFileStore(config.AuthPath())
-	p := provider.Anthropic(store, auth.OSContext{})
-	modelID := opts.ModelID
-	if modelID == "" {
-		modelID = DefaultModel
+	// Trust is decided before anything project-scoped is read, because the
+	// project's own settings must not be able to influence the decision.
+	tr := resolveTrust(cwd, opts.Mode == extension.ModeTUI, opts.TrustOverride)
+
+	set, err := loadSettings(cwd, tr.Trusted)
+	if err != nil {
+		return nil, err
 	}
-	model := p.Model(modelID)
-	if model == nil {
-		return nil, fmt.Errorf("unknown model %q (try `tau models`)", modelID)
+
+	store := auth.NewFileStore(config.AuthPath())
+	reg, err := buildModels(store)
+	if err != nil {
+		return nil, err
+	}
+
+	model, thinking, err := resolveModel(reg, opts, set)
+	if err != nil {
+		return nil, err
 	}
 
 	var toolset []agent.Tool
@@ -142,10 +177,17 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 		toolset = tools.CodingTools(e)
 	}
 
-	tr := resolveTrust(cwd, opts.Mode == extension.ModeTUI, opts.TrustOverride)
 	systemPrompt := buildSystemPrompt(cwd, toolset, tr.Trusted, opts)
 
-	cs := &Session{Env: e, Model: model, Trust: tr}
+	ui := opts.UI
+	if ui == nil {
+		ui = extension.NoUI{}
+	}
+
+	cs := &Session{
+		Env: e, Model: model, Trust: tr, Cwd: cwd,
+		Models: reg, Settings: set, UI: ui, store: store, opts: opts,
+	}
 
 	// Restore transcript from disk when resuming.
 	var restored []ai.Message
@@ -198,7 +240,7 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 	}
 	if len(opts.Extensions) > 0 {
 		cs.Extensions = extension.NewRunner(extension.RunnerOptions{
-			Mode: mode, Cwd: cwd, Trusted: tr.Trusted,
+			Mode: mode, Cwd: cwd, Trusted: tr.Trusted, UI: ui,
 		})
 		for _, e := range opts.Extensions {
 			_ = cs.Extensions.Load(e)
@@ -217,12 +259,17 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 	cs.Agent = agent.NewAgent(agent.Options{
 		SystemPrompt:  systemPrompt,
 		Model:         model,
-		ThinkingLevel: opts.ThinkingLevel,
+		ThinkingLevel: thinking,
 		Tools:         toolset,
 		Messages:      restored,
-		Stream:        p.StreamSimple,
+		Stream:        cs.stream,
 		Config:        loopCfg,
 	})
+	cs.Agent.SteeringMode = agent.QueueMode(set.SteeringMode())
+	cs.Agent.FollowUpMode = agent.QueueMode(set.FollowUpMode())
+
+	// Commands need the built agent, so the registry is assembled last.
+	cs.Commands = cs.buildCommands()
 
 	// Persist every message the loop produces.
 	if cs.Session != nil {
@@ -250,8 +297,88 @@ func (s *Session) Close(ctx context.Context, reason string) {
 	}
 }
 
-// DefaultModel is tau's default until settings land in P3.
+// DefaultModel is the model tau picks when neither the caller nor settings
+// name one.
 const DefaultModel = "claude-sonnet-5"
+
+// loadSettings reads the merged configuration. The project scope is gated on
+// the trust decision: an untrusted directory's settings.json is not read.
+func loadSettings(cwd string, trusted bool) (*settings.Resolved, error) {
+	mgr, err := settings.Load(settings.Options{
+		Cwd: cwd, AgentDir: config.AgentDir(), ProjectTrusted: trusted,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("loading settings: %w", err)
+	}
+	return mgr.Resolve()
+}
+
+// buildModels composes the compiled provider catalog with ~/.tau/models.json.
+// A missing or malformed models.json is not fatal: the built-ins still work,
+// which matters because the file is hand-edited.
+func buildModels(store auth.CredentialStore) (*models.Registry, error) {
+	builtins := []*provider.Provider{provider.Anthropic(store, auth.OSContext{})}
+	cfg, err := models.LoadConfig(config.ModelsPath())
+	if err != nil {
+		cfg = nil
+	}
+	return models.NewRegistry(builtins, cfg)
+}
+
+// resolveModel picks the model and thinking level for the run: explicit
+// option, then settings, then tau's default.
+func resolveModel(reg *models.Registry, opts Options, set *settings.Resolved) (*ai.Model, ai.ModelThinkingLevel, error) {
+	spec := opts.ModelID
+	if spec == "" {
+		spec = set.DefaultModel()
+	}
+	if spec == "" {
+		spec = DefaultModel
+	}
+
+	match, err := reg.Resolve(spec)
+	if err != nil {
+		return nil, "", fmt.Errorf("%w (try `tau models`)", err)
+	}
+
+	// Precedence for thinking: the flag, then a ":level" suffix on the model
+	// spec, then settings.
+	level := opts.ThinkingLevel
+	if level == "" {
+		level = ai.ModelThinkingLevel(match.ThinkingLevel)
+	}
+	if level == "" {
+		level = ai.ModelThinkingLevel(set.DefaultThinkingLevel())
+	}
+	return match.Model, ai.ClampThinkingLevel(match.Model, level), nil
+}
+
+// stream dispatches to whichever provider serves the model in play. Resolving
+// per call rather than binding one provider at construction is what makes
+// mid-session model switching work across providers.
+func (s *Session) stream(ctx context.Context, model *ai.Model, c ai.Context, opts *ai.SimpleStreamOptions) *ai.MessageStream {
+	p := s.Models.ProviderFor(model)
+	if p == nil || p.StreamSimple == nil {
+		return errorStream(model, fmt.Errorf("no provider configured for %s", model.Provider))
+	}
+	return p.StreamSimple(ctx, model, c, opts)
+}
+
+// errorStream honors the never-throw contract: a configuration failure is a
+// terminal error event, not an out-of-band error.
+func errorStream(model *ai.Model, err error) *ai.MessageStream {
+	st := ai.NewMessageStream()
+	msg := &ai.AssistantMessage{Content: ai.ContentList{}}
+	if model != nil {
+		msg.Api, msg.Provider, msg.Model = model.Api, model.Provider, model.ID
+	}
+	st.Push(ai.Event{
+		Type:   ai.EventError,
+		Reason: ai.StopError,
+		Error:  ai.ErrorMessage(msg, ai.StopError, err.Error()),
+	})
+	return st
+}
 
 // persistSink appends completed messages to the session file. Streaming
 // updates are skipped: only message_end carries a final message.

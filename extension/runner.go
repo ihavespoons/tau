@@ -30,6 +30,7 @@ type Runner struct {
 	trusted      bool
 	systemPrompt string
 	runtime      Runtime
+	ui           UI
 
 	// generation invalidates contexts when the session is replaced.
 	generation uint64
@@ -43,19 +44,34 @@ type RunnerOptions struct {
 	Mode    Mode
 	Cwd     string
 	Trusted bool
+	// UI is the host's interactive surface. Nil means headless: dialogs fail
+	// with ErrNoUI instead of hanging.
+	UI UI
 	// OnError receives every handler failure. Nil collects them for Errors().
 	OnError func(*Error)
 }
 
 // NewRunner creates a Runner with no extensions loaded.
 func NewRunner(opts RunnerOptions) *Runner {
-	return &Runner{mode: opts.Mode, cwd: opts.Cwd, trusted: opts.Trusted, onError: opts.OnError}
+	ui := opts.UI
+	if ui == nil {
+		ui = NoUI{}
+	}
+	return &Runner{
+		mode: opts.Mode, cwd: opts.Cwd, trusted: opts.Trusted,
+		ui: ui, onError: opts.OnError,
+	}
 }
 
 // Load runs an extension's factory and registers it. A factory that fails is
 // reported and skipped: one broken extension must not prevent startup.
 func (r *Runner) Load(ext Extension) error {
-	api := &API{name: ext.Name, path: ext.Path, flagVals: map[string]any{}}
+	r.mu.Lock()
+	api := &API{
+		name: ext.Name, path: ext.Path, flagVals: map[string]any{},
+		ui: r.ui, cwd: r.cwd, mode: r.mode, trusted: r.trusted, runtime: r.runtime,
+	}
+	r.mu.Unlock()
 	if err := ext.Factory(api); err != nil {
 		e := &Error{Extension: ext.Name, Event: "load", Err: err}
 		r.reportError(e)
@@ -151,6 +167,14 @@ func (r *Runner) Commands() []Command {
 // newContext issues a context stamped with the current generation.
 func (r *Runner) newContext() *Context {
 	return &Context{runner: r, generation: atomic.LoadUint64(&r.generation)}
+}
+
+// NewCommandContext issues the context a command handler receives. Hosts call
+// this when dispatching an extension command; the context goes stale as soon
+// as the session is replaced, so it must be issued per invocation rather than
+// captured.
+func (r *Runner) NewCommandContext() *CommandContext {
+	return &CommandContext{Context: r.newContext()}
 }
 
 // handlersFor collects (api, handler) pairs in dispatch order.

@@ -195,13 +195,63 @@ func (a runtimeAdapter) SetActiveTools(names []string) error {
 	for _, n := range names {
 		want[n] = true
 	}
+	a.s.mu.Lock()
+	all := append([]agent.Tool{}, a.s.allTools...)
+	a.s.mu.Unlock()
+
 	var keep []agent.Tool
-	for _, t := range a.s.allTools {
+	for _, t := range all {
 		if want[t.Def().Name] {
 			keep = append(keep, t)
 		}
 	}
 	a.s.Agent.SetTools(keep)
+	return nil
+}
+
+// RegisterTools adds tools to the live set. A tool registered after startup —
+// an MCP server announcing tools/list_changed, say — has to reach both the
+// registry and the agent's active set, or it exists but is never offered.
+func (a runtimeAdapter) RegisterTools(ts []agent.Tool) error {
+	if len(ts) == 0 {
+		return nil
+	}
+
+	a.s.mu.Lock()
+	for _, t := range ts {
+		name := t.Def().Name
+		replaced := false
+		for i, existing := range a.s.allTools {
+			if existing.Def().Name == name {
+				a.s.allTools[i] = t
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			a.s.allTools = append(a.s.allTools, t)
+		}
+	}
+	a.s.mu.Unlock()
+
+	// Mirror the change into the active set, preserving order and honoring
+	// any deactivation an extension has already made.
+	active := a.s.Agent.Tools()
+	for _, t := range ts {
+		name := t.Def().Name
+		replaced := false
+		for i, existing := range active {
+			if existing.Def().Name == name {
+				active[i] = t
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			active = append(active, t)
+		}
+	}
+	a.s.Agent.SetTools(active)
 	return nil
 }
 

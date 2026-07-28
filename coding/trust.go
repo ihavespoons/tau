@@ -17,6 +17,9 @@ import (
 //
 // Without a UI to prompt with, an undecided project is denied: trust fails
 // closed.
+// agentDir is tau's global state directory.
+func agentDir() string { return config.AgentDir() }
+
 func resolveTrust(cwd string, hasUI bool, override *bool) trust.Outcome {
 	agentDir := config.AgentDir()
 

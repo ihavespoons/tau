@@ -46,6 +46,9 @@ type Result struct {
 	Prompt string
 	// Quit requests that the session end.
 	Quit bool
+	// SessionChanged reports that the command replaced the underlying session
+	// (/new, /resume), so the host should redraw anything derived from it.
+	SessionChanged bool
 }
 
 // Command is an executable slash command.

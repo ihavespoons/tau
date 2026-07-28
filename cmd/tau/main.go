@@ -19,6 +19,7 @@ import (
 	"github.com/ihavespoons/tau/coding"
 	"github.com/ihavespoons/tau/config"
 	"github.com/ihavespoons/tau/extension"
+	"github.com/ihavespoons/tau/internal/tui"
 	"github.com/ihavespoons/tau/session"
 )
 
@@ -85,6 +86,8 @@ func printMode(args []string) error {
 		fmt.Fprint(os.Stderr, `tau — a coding agent for your terminal
 
 usage:
+  tau                    start an interactive session
+  tau -c                 continue the most recent session here
   tau -p "prompt"        run the agent (non-interactive)
   tau -p -c "prompt"     continue the most recent session here
   tau login              authenticate with Anthropic (Claude Pro/Max OAuth or API key)
@@ -102,27 +105,20 @@ flags:
 	}
 
 	prompt := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	piped := false
 	if prompt == "" {
 		stat, _ := os.Stdin.Stat()
 		if stat != nil && stat.Mode()&os.ModeCharDevice == 0 {
+			piped = true
 			b, err := os.ReadFile("/dev/stdin")
 			if err == nil {
 				prompt = strings.TrimSpace(string(b))
 			}
 		}
 	}
-	if prompt == "" {
-		fs.Usage()
-		return errors.New("no prompt given (interactive mode lands in P4)")
-	}
 
 	ctx, cancel := ctxWithSignals()
 	defer cancel()
-
-	extMode := extension.ModePrint
-	if *mode == "json" {
-		extMode = extension.ModeJSON
-	}
 
 	var trustOverride *bool
 	if *approve {
@@ -131,6 +127,31 @@ flags:
 	} else if *noApprove {
 		no := false
 		trustOverride = &no
+	}
+
+	// No prompt and a real terminal means interactive: that is the default way
+	// to run tau, and every other mode is an explicit opt-in.
+	if prompt == "" {
+		if piped || *print {
+			fs.Usage()
+			return errors.New("no prompt given")
+		}
+		return tui.Run(ctx, tui.Options{Coding: coding.Options{
+			ModelID:       *modelID,
+			ThinkingLevel: ai.ModelThinkingLevel(*thinking),
+			SystemPrompt:  *system,
+			NoTools:       *noTools,
+			NoSession:     *noSession,
+			Resume:        *cont,
+			SessionPath:   *sessPath,
+			TrustOverride: trustOverride,
+			Extensions:    bundledExtensions(),
+		}})
+	}
+
+	extMode := extension.ModePrint
+	if *mode == "json" {
+		extMode = extension.ModeJSON
 	}
 
 	cs, err := coding.New(ctx, coding.Options{
@@ -143,6 +164,7 @@ flags:
 		SessionPath:   *sessPath,
 		Mode:          extMode,
 		TrustOverride: trustOverride,
+		Extensions:    bundledExtensions(),
 	})
 	if err != nil {
 		return err

@@ -131,6 +131,13 @@ type API struct {
 	name string
 	path string
 
+	// Host facts, copied from the Runner at load time so a factory can make
+	// decisions — which config files to read, whether a UI exists — before
+	// any event has been dispatched.
+	cwd     string
+	mode    Mode
+	trusted bool
+
 	handlers map[EventType][]any
 
 	tools     []agent.Tool
@@ -142,6 +149,9 @@ type API struct {
 	// runtime is bound by the Runner once the host is ready; action methods
 	// before binding return ErrNotBound.
 	runtime Runtime
+	// ui is the host's interactive surface, available from the moment the
+	// factory runs so an extension can mount a widget during registration.
+	ui UI
 }
 
 // ErrNotBound is returned by action methods called during factory execution,
@@ -153,6 +163,16 @@ func (a *API) Name() string { return a.name }
 
 // Path returns the extension's source path, when it has one.
 func (a *API) Path() string { return a.path }
+
+// Cwd is the session's working directory.
+func (a *API) Cwd() string { return a.cwd }
+
+// Mode is the host's UI mode.
+func (a *API) Mode() Mode { return a.mode }
+
+// IsProjectTrusted reports whether project-scoped resources were allowed to
+// load. An extension that reads files from the project must respect it.
+func (a *API) IsProjectTrusted() bool { return a.trusted }
 
 func (a *API) on(t EventType, h any) {
 	a.mu.Lock()
@@ -237,10 +257,20 @@ func (a *API) OnInput(h InputHandler)           { a.on(EventInput, h) }
 
 // RegisterTool adds a tool. Registering a name that already exists overrides
 // the earlier tool, which is how extensions replace built-ins.
+//
+// Registration is legal at any time. Before the host binds a runtime the tool
+// is simply collected; afterwards the active tool set is already live, so the
+// tool is pushed into it as well. That is what lets an MCP server which
+// announces tools/list_changed add tools mid-session.
 func (a *API) RegisterTool(t agent.Tool) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.tools = append(a.tools, t)
+	rt := a.runtime
+	a.mu.Unlock()
+
+	if rt != nil {
+		_ = rt.RegisterTools([]agent.Tool{t})
+	}
 }
 
 // RegisterCommand adds a slash command.
@@ -304,6 +334,9 @@ func (a *API) Flags() []Flag {
 // Runtime is what the host provides so extensions can act on the session. It
 // is bound after all factories have run.
 type Runtime interface {
+	// RegisterTools adds tools to the live set, replacing any of the same
+	// name. Called for registrations that arrive after the host is bound.
+	RegisterTools(ts []agent.Tool) error
 	SendMessage(msg ai.Message, deliverAs string) error
 	SetSessionName(name string) error
 	SessionName() string
