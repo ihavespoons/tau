@@ -327,6 +327,25 @@ type ToolResultMessage struct {
 	Timestamp      int64    `json:"timestamp"` // unix ms
 }
 
+// Clone returns a copy safe to hand to another goroutine while the original
+// keeps being mutated. Content blocks are value types stored in interfaces, so
+// copying the slice is enough — a block is replaced, never mutated in place.
+func (m *AssistantMessage) Clone() *AssistantMessage {
+	if m == nil {
+		return nil
+	}
+	cp := *m
+	if m.Content != nil {
+		cp.Content = make(ContentList, len(m.Content))
+		copy(cp.Content, m.Content)
+	}
+	if m.Diagnostics != nil {
+		cp.Diagnostics = make([]Diagnostic, len(m.Diagnostics))
+		copy(cp.Diagnostics, m.Diagnostics)
+	}
+	return &cp
+}
+
 // Message is a UserMessage, AssistantMessage, or ToolResultMessage.
 type Message interface {
 	Role() string

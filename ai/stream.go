@@ -142,7 +142,17 @@ func NewMessageStream() *MessageStream {
 
 // Push appends an event. Pushing a terminal event completes the stream;
 // events pushed after completion are dropped (mirroring Pi).
+//
+// Partial is snapshotted here. Producers accumulate into one message and
+// mutate it as deltas arrive — which is safe in Pi because JavaScript is
+// single-threaded, but a data race in Go where the producer runs on its own
+// goroutine. Snapshotting centrally makes every provider safe by construction
+// and makes Event.Partial's contract true: it is a copy owned by the consumer,
+// valid as of the moment it was emitted.
 func (s *MessageStream) Push(ev Event) {
+	if ev.Partial != nil {
+		ev.Partial = ev.Partial.Clone()
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()

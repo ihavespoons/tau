@@ -98,3 +98,36 @@ func TestEventJSONShapes(t *testing.T) {
 		}
 	}
 }
+
+// Producers accumulate into one message and mutate it as deltas arrive. The
+// stream must hand consumers a snapshot, or every provider races the consumer
+// (this is safe in Pi only because JavaScript is single-threaded).
+func TestPushSnapshotsPartial(t *testing.T) {
+	s := NewMessageStream()
+	live := &AssistantMessage{Content: ContentList{TextContent{Text: "a"}}}
+
+	s.Push(Event{Type: EventTextDelta, Delta: "a", Partial: live})
+
+	// Producer keeps mutating the message it owns.
+	live.Content[0] = TextContent{Text: "ab"}
+	live.Content = append(live.Content, TextContent{Text: "second block"})
+	live.StopReason = StopStop
+
+	var seen Event
+	for ev := range s.Events() {
+		seen = ev
+		break
+	}
+	if seen.Partial == live {
+		t.Fatal("consumer received the producer's live message, not a snapshot")
+	}
+	if len(seen.Partial.Content) != 1 {
+		t.Errorf("snapshot content len = %d, want 1 (later appends must not leak)", len(seen.Partial.Content))
+	}
+	if got := seen.Partial.Content[0].(TextContent).Text; got != "a" {
+		t.Errorf("snapshot text = %q, want %q (later mutation must not leak)", got, "a")
+	}
+	if seen.Partial.StopReason == StopStop {
+		t.Error("later stop-reason mutation leaked into the snapshot")
+	}
+}
