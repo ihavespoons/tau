@@ -22,6 +22,7 @@ import (
 	"github.com/ihavespoons/tau/session"
 	"github.com/ihavespoons/tau/skills"
 	"github.com/ihavespoons/tau/tools"
+	"github.com/ihavespoons/tau/trust"
 )
 
 // Options configures a coding session.
@@ -38,6 +39,8 @@ type Options struct {
 	AppendSystemPrompt string
 	// NoSkills disables skill discovery.
 	NoSkills bool
+	// TrustOverride forces the project-trust decision (--approve/--no-approve).
+	TrustOverride *bool
 	// Extensions are loaded before the session starts, in order.
 	Extensions []extension.Extension
 	// Mode is reported to extensions so they can degrade gracefully.
@@ -57,6 +60,8 @@ type Session struct {
 	Path    string
 	// Extensions dispatches hooks; nil when no extensions are loaded.
 	Extensions *extension.Runner
+	// Trust records whether project-scoped resources were allowed to load.
+	Trust trust.Outcome
 
 	// allTools is the full registered set, including tools an extension has
 	// deactivated — SetActiveTools selects from here.
@@ -71,7 +76,7 @@ func envExecOptions() env.ExecOptions { return env.ExecOptions{Timeout: 2 * time
 // buildSystemPrompt assembles the run's system prompt from the active tools'
 // declared snippets and guidelines, the project's AGENTS.md/CLAUDE.md files,
 // and any discovered skills.
-func buildSystemPrompt(cwd string, toolset []agent.Tool, opts Options) string {
+func buildSystemPrompt(cwd string, toolset []agent.Tool, trusted bool, opts Options) string {
 	po := prompt.Options{
 		CustomPrompt:       opts.SystemPrompt,
 		AppendSystemPrompt: opts.AppendSystemPrompt,
@@ -89,9 +94,15 @@ func buildSystemPrompt(cwd string, toolset []agent.Tool, opts Options) string {
 
 	po.ContextFiles = prompt.LoadContextFiles(cwd, config.AgentDir())
 
+	// Project-local skills are gated: an untrusted directory must not inject
+	// instructions into the system prompt.
 	if !opts.NoSkills {
+		skillCwd := cwd
+		if !trusted {
+			skillCwd = ""
+		}
 		res := skills.Load(skills.LoadOptions{
-			Cwd: cwd, AgentDir: config.AgentDir(), IncludeDefaults: true,
+			Cwd: skillCwd, AgentDir: config.AgentDir(), IncludeDefaults: true,
 		})
 		po.Skills = res.Skills
 	}
@@ -131,9 +142,10 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 		toolset = tools.CodingTools(e)
 	}
 
-	systemPrompt := buildSystemPrompt(cwd, toolset, opts)
+	tr := resolveTrust(cwd, opts.Mode == extension.ModeTUI, opts.TrustOverride)
+	systemPrompt := buildSystemPrompt(cwd, toolset, tr.Trusted, opts)
 
-	cs := &Session{Env: e, Model: model}
+	cs := &Session{Env: e, Model: model, Trust: tr}
 
 	// Restore transcript from disk when resuming.
 	var restored []ai.Message
@@ -186,7 +198,7 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 	}
 	if len(opts.Extensions) > 0 {
 		cs.Extensions = extension.NewRunner(extension.RunnerOptions{
-			Mode: mode, Cwd: cwd, Trusted: true,
+			Mode: mode, Cwd: cwd, Trusted: tr.Trusted,
 		})
 		for _, e := range opts.Extensions {
 			_ = cs.Extensions.Load(e)

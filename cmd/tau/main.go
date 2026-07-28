@@ -29,7 +29,6 @@ var (
 	date    = "unknown"
 )
 
-
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "tau: "+err.Error())
@@ -77,6 +76,8 @@ func printMode(args []string) error {
 		sessPath  = fs.String("session", "", "resume a specific session file")
 		verbose   = fs.Bool("verbose", false, "show tool calls and usage")
 		mode      = fs.String("mode", "text", "output mode: text|json")
+		approve   = fs.Bool("approve", false, "trust this project's .tau resources")
+		noApprove = fs.Bool("no-approve", false, "do not trust this project's .tau resources")
 	)
 	fs.BoolVar(print, "p", false, "print mode (non-interactive)")
 	fs.BoolVar(cont, "c", false, "continue the most recent session")
@@ -123,6 +124,15 @@ flags:
 		extMode = extension.ModeJSON
 	}
 
+	var trustOverride *bool
+	if *approve {
+		yes := true
+		trustOverride = &yes
+	} else if *noApprove {
+		no := false
+		trustOverride = &no
+	}
+
 	cs, err := coding.New(ctx, coding.Options{
 		ModelID:       *modelID,
 		ThinkingLevel: ai.ModelThinkingLevel(*thinking),
@@ -132,6 +142,7 @@ flags:
 		Resume:        *cont,
 		SessionPath:   *sessPath,
 		Mode:          extMode,
+		TrustOverride: trustOverride,
 	})
 	if err != nil {
 		return err
@@ -143,6 +154,9 @@ flags:
 	}
 	if *verbose {
 		fmt.Fprintln(os.Stderr, "tau: "+cs.Describe())
+		if !cs.Trust.Trusted {
+			fmt.Fprintln(os.Stderr, "tau: project resources not loaded ("+cs.Trust.Reason+")")
+		}
 	}
 
 	out := &flushWriter{w: os.Stdout}
