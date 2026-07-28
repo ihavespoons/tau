@@ -61,6 +61,13 @@ type ToolDef struct {
 	Label string
 	// Parameters is the JSON Schema for the tool's arguments.
 	Parameters *jsonschema.Schema
+	// PromptSnippet is the tool's entry in the system prompt's "Available
+	// tools" section. A tool with no snippet is callable but not advertised
+	// there (Pi gates the section on this field).
+	PromptSnippet string
+	// PromptGuidelines are appended to the system prompt's Guidelines
+	// section when this tool is active.
+	PromptGuidelines []string
 	// ExecutionMode overrides the loop's default for this tool.
 	ExecutionMode ExecutionMode
 	// ConstrainedSampling optionally requests provider-side output constraints.

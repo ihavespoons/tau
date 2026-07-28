@@ -1,0 +1,11 @@
+{"type":"session","version":3,"id":"01937b2e-4a1c-7c3f-9d2e-8f1a2b3c4d5e","timestamp":"2026-07-28T14:00:00.000Z","cwd":"/Users/ben/Code/tau"}
+{"type":"message","id":"a1b2c3d4","parentId":null,"timestamp":"2026-07-28T14:00:01.000Z","message":{"role":"user","content":"Fix the failing test","timestamp":1785247201000}}
+{"type":"message","id":"b2c3d4e5","parentId":"a1b2c3d4","timestamp":"2026-07-28T14:00:05.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Let me look at the test."},{"type":"text","text":"I'll check the test file."},{"type":"toolCall","id":"toolu_01","name":"read","arguments":{"path":"main_test.go"}}],"api":"anthropic-messages","provider":"anthropic","model":"claude-sonnet-5","usage":{"input":1200,"output":95,"cacheRead":800,"cacheWrite":400,"totalTokens":2495,"cost":{"input":0.0036,"output":0.001425,"cacheRead":0.00024,"cacheWrite":0.0015,"total":0.006765}},"stopReason":"toolUse","timestamp":1785247205000}}
+{"type":"message","id":"c3d4e5f6","parentId":"b2c3d4e5","timestamp":"2026-07-28T14:00:06.000Z","message":{"role":"toolResult","toolCallId":"toolu_01","toolName":"read","content":[{"type":"text","text":"func TestThing(t *testing.T) { ... }"}],"details":{"lines":42},"isError":false,"timestamp":1785247206000}}
+{"type":"model_change","id":"d4e5f6a7","parentId":"c3d4e5f6","timestamp":"2026-07-28T14:05:00.000Z","provider":"anthropic","modelId":"claude-opus-5"}
+{"type":"thinking_level_change","id":"e5f6a7b8","parentId":"d4e5f6a7","timestamp":"2026-07-28T14:06:00.000Z","thinkingLevel":"high"}
+{"type":"active_tools_change","id":"f6a7b8c9","parentId":"e5f6a7b8","timestamp":"2026-07-28T14:06:30.000Z","activeToolNames":["read","bash","edit"]}
+{"type":"custom","id":"a7b8c9d0","parentId":"f6a7b8c9","timestamp":"2026-07-28T14:07:00.000Z","customType":"todo-tracker","data":{"open":3,"done":1}}
+{"type":"custom_message","id":"b8c9d0e1","parentId":"a7b8c9d0","timestamp":"2026-07-28T14:07:30.000Z","customType":"lint-reporter","content":"golangci-lint reported 2 issues.","display":true}
+{"type":"label","id":"c9d0e1f2","parentId":"b8c9d0e1","timestamp":"2026-07-28T14:08:00.000Z","targetId":"a1b2c3d4","label":"checkpoint-1"}
+{"type":"session_info","id":"d0e1f2a3","parentId":"c9d0e1f2","timestamp":"2026-07-28T14:09:00.000Z","name":"Fix failing test"}
