@@ -18,7 +18,9 @@ import (
 	"github.com/ihavespoons/tau/ai/provider"
 	"github.com/ihavespoons/tau/config"
 	"github.com/ihavespoons/tau/extension"
+	"github.com/ihavespoons/tau/prompt"
 	"github.com/ihavespoons/tau/session"
+	"github.com/ihavespoons/tau/skills"
 	"github.com/ihavespoons/tau/tools"
 )
 
@@ -32,6 +34,10 @@ type Options struct {
 	NoTools bool
 	// NoSession skips persistence (useful for one-shot runs).
 	NoSession bool
+	// AppendSystemPrompt is appended after the built system prompt.
+	AppendSystemPrompt string
+	// NoSkills disables skill discovery.
+	NoSkills bool
 	// Extensions are loaded before the session starts, in order.
 	Extensions []extension.Extension
 	// Mode is reported to extensions so they can degrade gracefully.
@@ -62,16 +68,36 @@ type Session struct {
 // commands.
 func envExecOptions() env.ExecOptions { return env.ExecOptions{Timeout: 2 * time.Minute} }
 
-// DefaultSystemPrompt is the P2 baseline. P3 replaces it with the full
-// builder (tool snippets, guidelines, AGENTS.md/CLAUDE.md context files).
-const DefaultSystemPrompt = `You are tau, an expert coding assistant working in a terminal.
+// buildSystemPrompt assembles the run's system prompt from the active tools'
+// declared snippets and guidelines, the project's AGENTS.md/CLAUDE.md files,
+// and any discovered skills.
+func buildSystemPrompt(cwd string, toolset []agent.Tool, opts Options) string {
+	po := prompt.Options{
+		CustomPrompt:       opts.SystemPrompt,
+		AppendSystemPrompt: opts.AppendSystemPrompt,
+		Cwd:                cwd,
+		ToolSnippets:       map[string]string{},
+	}
+	for _, t := range toolset {
+		d := t.Def()
+		po.SelectedTools = append(po.SelectedTools, d.Name)
+		if d.PromptSnippet != "" {
+			po.ToolSnippets[d.Name] = d.PromptSnippet
+		}
+		po.PromptGuidelines = append(po.PromptGuidelines, d.PromptGuidelines...)
+	}
 
-You have tools to read, write, and edit files, and to run bash commands.
-Use them to inspect the project before making changes — do not guess at file
-contents. Make the smallest change that correctly solves the task, and verify
-it when you can (run the tests, run the program).
+	po.ContextFiles = prompt.LoadContextFiles(cwd, config.AgentDir())
 
-Be concise: the user is reading your output in a terminal.`
+	if !opts.NoSkills {
+		res := skills.Load(skills.LoadOptions{
+			Cwd: cwd, AgentDir: config.AgentDir(), IncludeDefaults: true,
+		})
+		po.Skills = res.Skills
+	}
+
+	return prompt.Build(po)
+}
 
 // New builds a coding session.
 func New(ctx context.Context, opts Options) (*Session, error) {
@@ -105,11 +131,7 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 		toolset = tools.CodingTools(e)
 	}
 
-	systemPrompt := opts.SystemPrompt
-	if systemPrompt == "" {
-		systemPrompt = DefaultSystemPrompt
-	}
-	systemPrompt += "\n\nCurrent working directory: " + cwd
+	systemPrompt := buildSystemPrompt(cwd, toolset, opts)
 
 	cs := &Session{Env: e, Model: model}
 

@@ -18,6 +18,7 @@ import (
 	"github.com/ihavespoons/tau/ai/provider"
 	"github.com/ihavespoons/tau/coding"
 	"github.com/ihavespoons/tau/config"
+	"github.com/ihavespoons/tau/extension"
 	"github.com/ihavespoons/tau/session"
 )
 
@@ -75,6 +76,7 @@ func printMode(args []string) error {
 		cont      = fs.Bool("continue", false, "continue the most recent session for this directory")
 		sessPath  = fs.String("session", "", "resume a specific session file")
 		verbose   = fs.Bool("verbose", false, "show tool calls and usage")
+		mode      = fs.String("mode", "text", "output mode: text|json")
 	)
 	fs.BoolVar(print, "p", false, "print mode (non-interactive)")
 	fs.BoolVar(cont, "c", false, "continue the most recent session")
@@ -116,6 +118,11 @@ flags:
 	ctx, cancel := ctxWithSignals()
 	defer cancel()
 
+	extMode := extension.ModePrint
+	if *mode == "json" {
+		extMode = extension.ModeJSON
+	}
+
 	cs, err := coding.New(ctx, coding.Options{
 		ModelID:       *modelID,
 		ThinkingLevel: ai.ModelThinkingLevel(*thinking),
@@ -124,9 +131,15 @@ flags:
 		NoSession:     *noSession,
 		Resume:        *cont,
 		SessionPath:   *sessPath,
+		Mode:          extMode,
 	})
 	if err != nil {
 		return err
+	}
+	defer cs.Close(ctx, "exit")
+
+	if *mode == "json" {
+		return runJSONMode(ctx, cs, prompt)
 	}
 	if *verbose {
 		fmt.Fprintln(os.Stderr, "tau: "+cs.Describe())
@@ -341,5 +354,34 @@ func login(args []string) error {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, "Logged in. Credentials saved to "+config.AuthPath())
+	return nil
+}
+
+// runJSONMode streams the run as JSONL on stdout, one event per line, so tau
+// is scriptable in CI the way `pi --mode json` is.
+func runJSONMode(ctx context.Context, cs *coding.Session, prompt string) error {
+	jw := coding.NewJSONWriter(os.Stdout)
+	jw.Emit(coding.JSONEvent{
+		Type: "session_start", SessionPath: cs.Path, Model: cs.Model.ID,
+	})
+	cs.Agent.Subscribe(jw.Sink())
+
+	_, promptErr := cs.Prompt(ctx, prompt)
+
+	usage := cs.Usage()
+	final := coding.JSONEvent{Type: "result", Usage: &usage}
+	if promptErr != nil {
+		final.Error = promptErr.Error()
+	} else if msg := cs.Agent.ErrorMessage(); msg != "" {
+		final.Error = msg
+	}
+	jw.Emit(final)
+
+	if err := jw.Err(); err != nil {
+		return err
+	}
+	if final.Error != "" {
+		return errors.New(final.Error)
+	}
 	return nil
 }
