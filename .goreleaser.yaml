@@ -1,0 +1,45 @@
+version: 2
+
+project_name: tau
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: tau
+    main: ./cmd/tau
+    binary: tau
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+
+brews:
+  - name: tau
+    repository:
+      owner: ihavespoons
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/ihavespoons/tau
+    description: "Coding agent for your terminal — a Go reimplementation of Pi"
+    license: MIT
+    test: |
+      system "#{bin}/tau --version"
