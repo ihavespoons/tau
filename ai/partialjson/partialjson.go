@@ -72,13 +72,17 @@ func Repair(s string) string {
 	return b.String()
 }
 
+func isHexDigit(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+}
+
 func isHex4(s string) bool {
 	if len(s) != 4 {
 		return false
 	}
 	for i := 0; i < 4; i++ {
 		c := s[i]
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+		if !isHexDigit(c) {
 			return false
 		}
 	}
@@ -321,7 +325,7 @@ func (p *parser) str() (string, bool, error) {
 func isHexPrefix(s string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+		if !isHexDigit(c) {
 			return false
 		}
 	}
