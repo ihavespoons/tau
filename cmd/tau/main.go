@@ -10,13 +10,15 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
+	"github.com/ihavespoons/tau/agent"
 	"github.com/ihavespoons/tau/ai"
 	"github.com/ihavespoons/tau/ai/auth"
 	"github.com/ihavespoons/tau/ai/auth/oauth"
 	"github.com/ihavespoons/tau/ai/provider"
+	"github.com/ihavespoons/tau/coding"
 	"github.com/ihavespoons/tau/config"
+	"github.com/ihavespoons/tau/session"
 )
 
 // Set via -ldflags at release time.
@@ -26,7 +28,6 @@ var (
 	date    = "unknown"
 )
 
-const defaultModel = "claude-sonnet-5"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -47,6 +48,8 @@ func run(args []string) error {
 			return logout()
 		case "models":
 			return listModels()
+		case "sessions":
+			return listSessions()
 		}
 	}
 	return printMode(args)
@@ -58,26 +61,33 @@ func ctxWithSignals() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
-// printMode is the non-interactive `tau -p "prompt"` path: stream one
-// assistant turn to stdout. Sessions, tools, and the agent loop land in P2.
+// printMode is the non-interactive `tau -p "prompt"` path: run the agent
+// loop with tools and stream its work to stdout.
 func printMode(args []string) error {
 	fs := flag.NewFlagSet("tau", flag.ContinueOnError)
 	var (
-		modelID  = fs.String("model", defaultModel, "model id")
-		thinking = fs.String("thinking", "", "thinking level: off|minimal|low|medium|high|xhigh|max")
-		system   = fs.String("system-prompt", "", "system prompt")
-		maxTok   = fs.Int("max-tokens", 0, "max output tokens (0 = model default)")
-		print    = fs.Bool("print", false, "print mode (non-interactive)")
+		modelID   = fs.String("model", "", "model id")
+		thinking  = fs.String("thinking", "", "thinking level: off|minimal|low|medium|high|xhigh|max")
+		system    = fs.String("system-prompt", "", "system prompt override")
+		print     = fs.Bool("print", false, "print mode (non-interactive)")
+		noTools   = fs.Bool("no-tools", false, "disable tools")
+		noSession = fs.Bool("no-session", false, "do not persist a session")
+		cont      = fs.Bool("continue", false, "continue the most recent session for this directory")
+		sessPath  = fs.String("session", "", "resume a specific session file")
+		verbose   = fs.Bool("verbose", false, "show tool calls and usage")
 	)
 	fs.BoolVar(print, "p", false, "print mode (non-interactive)")
+	fs.BoolVar(cont, "c", false, "continue the most recent session")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, `tau — a coding agent for your terminal
 
 usage:
-  tau -p "prompt"        stream one response (non-interactive)
+  tau -p "prompt"        run the agent (non-interactive)
+  tau -p -c "prompt"     continue the most recent session here
   tau login              authenticate with Anthropic (Claude Pro/Max OAuth or API key)
   tau logout             remove stored credentials
   tau models             list available models
+  tau sessions           list sessions for this directory
   tau --version
 
 flags:
@@ -103,51 +113,59 @@ flags:
 		return errors.New("no prompt given (interactive mode lands in P4)")
 	}
 
-	p := provider.Anthropic(store(), auth.OSContext{})
-	model := p.Model(*modelID)
-	if model == nil {
-		return fmt.Errorf("unknown model %q (try `tau models`)", *modelID)
-	}
-
-	opts := &ai.SimpleStreamOptions{}
-	if *maxTok > 0 {
-		opts.MaxTokens = *maxTok
-	}
-	if *thinking != "" && *thinking != "off" {
-		clamped := ai.ClampThinkingLevel(model, ai.ModelThinkingLevel(*thinking))
-		if clamped != ai.ThinkingOff {
-			opts.Reasoning = ai.ThinkingLevel(clamped)
-		}
-	}
-
-	c := ai.Context{
-		SystemPrompt: *system,
-		Messages: ai.MessageList{ai.UserMessage{
-			Content: ai.UserContent{Text: prompt}, Timestamp: time.Now().UnixMilli(),
-		}},
-	}
-
 	ctx, cancel := ctxWithSignals()
 	defer cancel()
 
-	stream := p.StreamSimple(ctx, model, c, opts)
+	cs, err := coding.New(ctx, coding.Options{
+		ModelID:       *modelID,
+		ThinkingLevel: ai.ModelThinkingLevel(*thinking),
+		SystemPrompt:  *system,
+		NoTools:       *noTools,
+		NoSession:     *noSession,
+		Resume:        *cont,
+		SessionPath:   *sessPath,
+	})
+	if err != nil {
+		return err
+	}
+	if *verbose {
+		fmt.Fprintln(os.Stderr, "tau: "+cs.Describe())
+	}
+
 	out := &flushWriter{w: os.Stdout}
 	inThinking := false
-	for ev := range stream.Events() {
+	cs.Agent.Subscribe(func(_ context.Context, ev agent.Event) error {
 		switch ev.Type {
-		case ai.EventThinkingStart:
-			inThinking = true
-			out.write("\x1b[2m") // dim thinking
-		case ai.EventThinkingDelta:
-			out.write(ev.Delta)
-		case ai.EventThinkingEnd:
-			inThinking = false
-			out.write("\x1b[0m\n")
-		case ai.EventTextDelta:
-			out.write(ev.Delta)
-		case ai.EventToolCallEnd:
-			out.write(fmt.Sprintf("\n[tool: %s]\n", ev.ToolCall.Name))
+		case agent.EventMessageUpdate:
+			if ev.StreamEvent == nil {
+				return nil
+			}
+			switch ev.StreamEvent.Type {
+			case ai.EventThinkingStart:
+				inThinking = true
+				out.write("\x1b[2m") // dim thinking
+			case ai.EventThinkingDelta:
+				out.write(ev.StreamEvent.Delta)
+			case ai.EventThinkingEnd:
+				inThinking = false
+				out.write("\x1b[0m\n")
+			case ai.EventTextDelta:
+				out.write(ev.StreamEvent.Delta)
+			}
+		case agent.EventToolExecutionStart:
+			out.write(fmt.Sprintf("\n\x1b[36m· %s\x1b[0m %s\n", ev.ToolName, summarizeArgs(ev.Args)))
+		case agent.EventToolExecutionEnd:
+			if ev.IsError {
+				out.write(fmt.Sprintf("\x1b[31m  ↳ error: %s\x1b[0m\n", firstText(ev.Result)))
+			} else if *verbose {
+				out.write(fmt.Sprintf("\x1b[2m  ↳ %s\x1b[0m\n", truncateLine(firstText(ev.Result), 100)))
+			}
 		}
+		return nil
+	})
+
+	if _, err := cs.Prompt(ctx, prompt); err != nil {
+		return err
 	}
 	if inThinking {
 		out.write("\x1b[0m")
@@ -157,12 +175,61 @@ flags:
 		return out.err
 	}
 
-	final := stream.Result()
-	if final != nil && final.StopReason == ai.StopError {
-		return errors.New(final.ErrorMessage)
+	if *verbose {
+		u := cs.Usage()
+		fmt.Fprintf(os.Stderr, "tau: %d in / %d out tokens, $%.4f\n", u.Input, u.Output, u.Cost.Total)
 	}
-	if final != nil && final.StopReason == ai.StopAborted {
-		return errors.New("aborted")
+	if msg := cs.Agent.ErrorMessage(); msg != "" {
+		return errors.New(msg)
+	}
+	return nil
+}
+
+// summarizeArgs renders tool arguments compactly for the activity line.
+func summarizeArgs(args map[string]any) string {
+	for _, key := range []string{"path", "command", "pattern"} {
+		if v, ok := args[key]; ok {
+			return truncateLine(fmt.Sprint(v), 80)
+		}
+	}
+	return ""
+}
+
+func firstText(r *agent.ToolResult) string {
+	if r == nil || len(r.Content) == 0 {
+		return ""
+	}
+	if t, ok := r.Content[0].(ai.TextContent); ok {
+		return t.Text
+	}
+	return ""
+}
+
+func truncateLine(s string, max int) string {
+	s = strings.ReplaceAll(strings.TrimSpace(s), "\n", " ")
+	if len(s) > max {
+		return s[:max] + "…"
+	}
+	return s
+}
+
+// listSessions prints the sessions recorded for this directory.
+func listSessions() error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	repo := session.NewJSONLRepo(config.SessionsDir())
+	metas, err := repo.List(context.Background(), cwd)
+	if err != nil {
+		return err
+	}
+	if len(metas) == 0 {
+		fmt.Println("no sessions for " + cwd)
+		return nil
+	}
+	for _, m := range metas {
+		fmt.Printf("%s  %s\n", m.CreatedAt, m.Path)
 	}
 	return nil
 }
