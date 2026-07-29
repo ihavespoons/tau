@@ -53,16 +53,23 @@ length costs nothing to render.
 
 ## Other providers
 
-Twelve providers ship compiled in — Anthropic, OpenAI, Google, Groq, Cerebras,
-xAI, Mistral, Moonshot, Xiaomi, Hugging Face, and Cloudflare Workers AI. Set the
-provider's API key environment variable and its models appear in `tau models`,
-ready to select. Model data is generated from models.dev and diffed against
-Pi's own catalog, so the per-model quirks — which thinking levels a model
-accepts, which token field it wants, where its pricing tier changes — come
-along with it.
+**37 providers and 1,153 models ship compiled in** — Anthropic, OpenAI,
+OpenRouter, Google, Groq, Cerebras, xAI, DeepSeek, Mistral, Together, Fireworks,
+Moonshot, Z.ai, MiniMax, NVIDIA, Bedrock, Vertex, Azure, Copilot, the Vercel and
+Cloudflare gateways, and the rest. Set the provider's API key environment
+variable and its models appear in `tau models`, ready to select.
 
-Anything else that speaks `/v1/chat/completions` — OpenRouter, DeepSeek,
-Together, vLLM, llama.cpp, LiteLLM, Ollama — can be declared in
+The catalog is generated from models.dev and diffed field-by-field against
+Pi's own, so the per-model quirks come along with it: which thinking levels a
+model accepts, which token field it wants, where its pricing tier changes,
+whether it needs cache markers, which wire it actually speaks.
+
+Not every wire is implemented yet — a model on one tau cannot talk to is
+listed and selectable, and says so by name rather than pretending not to exist.
+Anthropic's and OpenAI's chat-completions wires are live today.
+
+Anything not listed that speaks `/v1/chat/completions` — vLLM, llama.cpp,
+LiteLLM, Ollama, a private gateway — can be declared in
 `~/.tau/agent/models.json` and used immediately:
 
 ```jsonc
@@ -90,15 +97,16 @@ Together, vLLM, llama.cpp, LiteLLM, Ollama — can be declared in
 ```
 
 Then `tau --model openrouter/anthropic/claude-sonnet-4.5`, or set
-`defaultModel` in settings. `tau models` lists everything tau can reach.
-Omitting `api` assumes `openai-completions`, which is what nearly every endpoint
-speaks; the per-provider quirks (reasoning dialect, cache markers, role names,
-token-field spelling) are detected from the provider id and base URL.
+`defaultModel` in settings. Omitting `api` assumes `openai-completions`, which
+is what nearly every endpoint speaks; the per-provider quirks are detected from
+the provider id and base URL.
 
-Providers whose model lists come from their own endpoints rather than
-models.dev — OpenRouter and the Vercel gateway among them — still need to be
-declared this way. To regenerate the compiled catalogs after an upstream
-change: `go run ./cmd/tau-genmodels -refresh`.
+Qualify a model with its provider — `anthropic/claude-sonnet-5`, not
+`claude-sonnet-5`. A bare id is matched loosely across the whole catalog, and a
+dozen providers resell the same models.
+
+To refresh the compiled catalogs after an upstream change:
+`go run ./cmd/tau-genmodels -refresh`.
 
 ## MCP
 
