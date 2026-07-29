@@ -164,8 +164,8 @@ func detectCompat(model *ai.Model) compat {
 		SupportsStrictMode:                          !f.moonshot && !f.together && !f.cloudflareGateway && !f.nvidia,
 		CacheControlFormat:                          cacheControlFormat,
 		SessionAffinityFormat:                       affinity,
-		SupportsLongCacheRetention: !(f.together || f.cloudflareWorkers ||
-			f.cloudflareGateway || f.nvidia || f.antLing),
+		SupportsLongCacheRetention: !f.together && !f.cloudflareWorkers &&
+			!f.cloudflareGateway && !f.nvidia && !f.antLing,
 	}
 }
 

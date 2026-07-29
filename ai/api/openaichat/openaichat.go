@@ -229,7 +229,7 @@ func consume(ctx context.Context, stream *ai.MessageStream, body io.Reader, mode
 	reader := sse.NewReader(body)
 	for {
 		if ctx.Err() != nil {
-			fail(errors.New("Request was aborted"))
+			fail(fmt.Errorf("Request was aborted")) //nolint:staticcheck // Pi error-message parity
 			return
 		}
 
@@ -355,7 +355,7 @@ func consume(ctx context.Context, stream *ai.MessageStream, body io.Reader, mode
 
 	switch {
 	case ctx.Err() != nil, output.StopReason == ai.StopAborted:
-		fail(errors.New("Request was aborted"))
+		fail(fmt.Errorf("Request was aborted")) //nolint:staticcheck // Pi error-message parity
 		return
 	case output.StopReason == ai.StopError:
 		msg := output.ErrorMessage
