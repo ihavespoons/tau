@@ -182,11 +182,16 @@ func doRequest(ctx context.Context, model *ai.Model, opts *Options, body []byte)
 		req.Header.Set(k, *v)
 	}
 
+	return httpClientFor(opts.TimeoutMs).Do(req)
+}
+
+// httpClientFor applies the caller's timeout, or tau's default.
+func httpClientFor(timeoutMs int) *http.Client {
 	timeout := defaultTimeout
-	if opts.TimeoutMs > 0 {
-		timeout = time.Duration(opts.TimeoutMs) * time.Millisecond
+	if timeoutMs > 0 {
+		timeout = time.Duration(timeoutMs) * time.Millisecond
 	}
-	return (&http.Client{Timeout: timeout}).Do(req)
+	return &http.Client{Timeout: timeout}
 }
 
 // chunk is one streamed generateContent response.

@@ -66,6 +66,8 @@ func Keyed(store auth.CredentialStore, env auth.EnvContext, o KeyedOptions) *Pro
 			return openairesp.StreamSimpleAzure(ctx, model, c, opts)
 		case ai.ApiGoogleGenerativeAI:
 			return googlegenai.StreamSimple(ctx, model, c, opts)
+		case ai.ApiGoogleVertex:
+			return googlegenai.StreamSimpleVertex(ctx, model, c, opts)
 		default:
 			return errStream(model, unsupportedWire(model))
 		}
@@ -90,6 +92,9 @@ func Keyed(store auth.CredentialStore, env auth.EnvContext, o KeyedOptions) *Pro
 				&openairesp.AzureOptions{Options: openairesp.Options{StreamOptions: *opts}})
 		case ai.ApiGoogleGenerativeAI:
 			return googlegenai.Stream(ctx, model, c, &googlegenai.Options{StreamOptions: *opts})
+		case ai.ApiGoogleVertex:
+			return googlegenai.StreamVertex(ctx, model, c,
+				&googlegenai.VertexOptions{Options: googlegenai.Options{StreamOptions: *opts}})
 		default:
 			return errStream(model, unsupportedWire(model))
 		}
@@ -125,7 +130,8 @@ func dominantApi(models []ai.Model) ai.Api {
 func StreamableWire(api ai.Api) bool {
 	switch api {
 	case ai.ApiOpenAICompletions, ai.ApiAnthropicMessages,
-		ai.ApiOpenAIResponses, ai.ApiAzureOpenAIResponses, ai.ApiGoogleGenerativeAI:
+		ai.ApiOpenAIResponses, ai.ApiAzureOpenAIResponses,
+		ai.ApiGoogleGenerativeAI, ai.ApiGoogleVertex:
 		return true
 	}
 	return false
