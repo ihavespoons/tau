@@ -30,8 +30,9 @@ type (
 	}
 
 	textPart struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type         string        `json:"type"`
+		Text         string        `json:"text"`
+		CacheControl *cacheControl `json:"cache_control,omitempty"`
 	}
 
 	imagePart struct {

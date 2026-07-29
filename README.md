@@ -51,6 +51,45 @@ The transcript is printed into your terminal's scrollback rather than an
 alternate screen, so scrolling, selection, and search keep working, and session
 length costs nothing to render.
 
+## Other providers
+
+Anthropic is built in. Anything that speaks `/v1/chat/completions` — OpenRouter,
+Groq, DeepSeek, Together, vLLM, llama.cpp, LiteLLM, Ollama — can be declared in
+`~/.tau/agent/models.json` and used immediately:
+
+```jsonc
+{
+  "providers": {
+    "openrouter": {
+      "name": "OpenRouter",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      // A "$VAR" reference is read from the environment, so the key
+      // never sits in a file.
+      "apiKey": "$OPENROUTER_API_KEY",
+      "models": [
+        {
+          "id": "anthropic/claude-sonnet-4.5",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "cost": { "input": 3.0, "output": 15.0, "cacheRead": 0.3, "cacheWrite": 3.75 }
+        }
+      ]
+    }
+  }
+}
+```
+
+Then `tau --model openrouter/anthropic/claude-sonnet-4.5`, or set
+`defaultModel` in settings. `tau models` lists everything tau can reach.
+Omitting `api` assumes `openai-completions`, which is what nearly every endpoint
+speaks; the per-provider quirks (reasoning dialect, cache markers, role names,
+token-field spelling) are detected from the provider id and base URL.
+
+Model metadata has to be written out by hand for now — the generated catalogs
+that make providers work with no configuration are still to come.
+
 ## MCP
 
 tau speaks the Model Context Protocol through a bundled extension. Configure

@@ -423,11 +423,17 @@ func (s *state) applyReasoningDetails(details []json.RawMessage, sync func(*live
 		var detail struct {
 			ID   string `json:"id"`
 			Type string `json:"type"`
+			Data string `json:"data"`
 		}
-		if err := json.Unmarshal(raw, &detail); err != nil || detail.ID == "" {
+		if err := json.Unmarshal(raw, &detail); err != nil {
 			continue
 		}
-		if !strings.Contains(detail.Type, "encrypted") {
+		// Only the encrypted form is a replayable signature, and only when it
+		// actually carries a payload. The plaintext forms (OpenRouter emits
+		// "reasoning.text" for Anthropic) are already surfaced as thinking
+		// content, and replaying a detail with no data would send the upstream
+		// a signature that verifies against nothing.
+		if detail.Type != "reasoning.encrypted" || detail.ID == "" || detail.Data == "" {
 			continue
 		}
 		if block, ok := s.byID[detail.ID]; ok {

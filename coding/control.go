@@ -204,6 +204,7 @@ func (s *Session) replaceSession(ctx context.Context, open func() (*session.Sess
 
 	s.Session = sess
 	s.Path = meta.Path
+	s.sessionID = meta.ID
 	s.Agent.SetMessages(restored)
 
 	if s.Extensions != nil {
@@ -415,12 +416,7 @@ func (s *Session) SessionSummary() string {
 	if !s.Trust.Trusted {
 		fmt.Fprintf(&b, "trust    project resources not loaded (%s)\n", s.Trust.Reason)
 	}
-	u := s.Usage()
-	fmt.Fprintf(&b, "usage    %d in / %d out tokens", u.Input, u.Output)
-	if u.CacheRead > 0 || u.CacheWrite > 0 {
-		fmt.Fprintf(&b, " (cache %d read / %d write)", u.CacheRead, u.CacheWrite)
-	}
-	fmt.Fprintf(&b, ", $%.4f\n", u.Cost.Total)
+	fmt.Fprintf(&b, "usage    %s\n", FormatUsage(s.Usage()))
 	fmt.Fprintf(&b, "tools    %s", strings.Join(s.ToolNames(), ", "))
 	return b.String()
 }

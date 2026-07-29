@@ -15,7 +15,6 @@ import (
 	"github.com/ihavespoons/tau/ai"
 	"github.com/ihavespoons/tau/ai/auth"
 	"github.com/ihavespoons/tau/ai/auth/oauth"
-	"github.com/ihavespoons/tau/ai/provider"
 	"github.com/ihavespoons/tau/coding"
 	"github.com/ihavespoons/tau/config"
 	"github.com/ihavespoons/tau/extension"
@@ -225,8 +224,7 @@ flags:
 	}
 
 	if *verbose {
-		u := cs.Usage()
-		fmt.Fprintf(os.Stderr, "tau: %d in / %d out tokens, $%.4f\n", u.Input, u.Output, u.Cost.Total)
+		fmt.Fprintf(os.Stderr, "tau: %s\n", coding.FormatUsage(cs.Usage()))
 	}
 	if msg := cs.Agent.ErrorMessage(); msg != "" {
 		return errors.New(msg)
@@ -299,12 +297,28 @@ func (f *flushWriter) write(s string) {
 	}
 }
 
+// listModels prints everything the registry knows, built-in and configured
+// alike. It has to go through the registry rather than a provider: a model
+// declared in models.json is only reachable by its qualified
+// "provider/id" spec, and printing the bare id would name something the user
+// then cannot select.
 func listModels() error {
-	p := provider.Anthropic(store(), auth.OSContext{})
-	for _, m := range p.Models {
-		levels := ai.SupportedThinkingLevels(&m)
-		fmt.Printf("%-20s %-22s ctx %8d  out %6d  $%.2f/$%.2f per Mtok  thinking: %v\n",
-			m.ID, m.Name, m.ContextWindow, m.MaxTokens, m.Cost.Input, m.Cost.Output, levels)
+	reg, warnings, err := coding.BuildRegistry(store())
+	if err != nil {
+		return err
+	}
+	for _, w := range warnings {
+		fmt.Fprintln(os.Stderr, "warning: "+w)
+	}
+
+	for _, p := range reg.Providers() {
+		fmt.Printf("\n%s\n", p.Name)
+		for _, m := range p.Models {
+			levels := ai.SupportedThinkingLevels(&m)
+			fmt.Printf("  %-34s %-30s ctx %8d  out %6d  $%.2f/$%.2f per Mtok  thinking: %v\n",
+				p.ID+"/"+m.ID, m.Name, m.ContextWindow, m.MaxTokens,
+				m.Cost.Input, m.Cost.Output, levels)
+		}
 	}
 	return nil
 }

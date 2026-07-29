@@ -275,18 +275,31 @@ func TestProviderErrorIsReadable(t *testing.T) {
 }
 
 // OpenRouter hides the upstream's real error under metadata.raw.
+//
+// The body below is a real 400 from openrouter.ai, trimmed. Its top-level
+// message is "Provider returned error" and nothing else — everything that
+// would let anyone fix the request is inside metadata.raw, which is why the
+// field is read at all.
 func TestOpenRouterMetadataIsSurfaced(t *testing.T) {
+	const body = `{"error":{"message":"Provider returned error","code":400,"metadata":{` +
+		`"raw":"{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",` +
+		`\"message\":\"tools.0.custom.name: String should match pattern '^[a-zA-Z0-9_-]{1,128}$'\"}}",` +
+		`"provider_name":"Azure","is_byok":false}}}`
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusBadGateway)
-		_, _ = w.Write([]byte(`{"error":{"message":"upstream failed","metadata":{"raw":"model is overloaded"}}}`))
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(body))
 	}))
 	defer srv.Close()
 
 	_, msg := collect(Stream(context.Background(), modelFor("openrouter", srv.URL), simpleContext(),
 		&Options{StreamOptions: ai.StreamOptions{APIKey: "k"}}))
 
-	if !strings.Contains(msg.ErrorMessage, "model is overloaded") {
-		t.Errorf("upstream detail was dropped: %q", msg.ErrorMessage)
+	if !strings.Contains(msg.ErrorMessage, "Provider returned error") {
+		t.Errorf("the outer message was dropped: %q", msg.ErrorMessage)
+	}
+	if !strings.Contains(msg.ErrorMessage, "tools.0.custom.name") {
+		t.Errorf("the only actionable detail was dropped: %q", msg.ErrorMessage)
 	}
 }
 
@@ -382,5 +395,88 @@ func TestResponseModelIsRecorded(t *testing.T) {
 		&Options{StreamOptions: ai.StreamOptions{APIKey: "k"}}))
 	if msg.ResponseModel != "actually-served-model" {
 		t.Errorf("response model: %q", msg.ResponseModel)
+	}
+}
+
+// reasoningDetailBody streams a tool call alongside a reasoning detail of the
+// caller's choosing.
+func reasoningDetailBody(detail string) string {
+	return chunk(`{"id":"c1","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":""}}]}}]}`) +
+		chunk(`{"id":"c1","choices":[{"delta":{"reasoning_details":[`+detail+`],"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":\"a\"}"}}]}}]}`) +
+		chunk(`{"id":"c1","choices":[{"delta":{},"finish_reason":"tool_calls"}]}`) +
+		"data: [DONE]\n\n"
+}
+
+// thoughtOf returns the signature attached to the message's single tool call.
+func thoughtOf(t *testing.T, msg *ai.AssistantMessage) string {
+	t.Helper()
+	for _, block := range msg.Content {
+		if tc, ok := block.(ai.ToolCall); ok {
+			return tc.ThoughtSignature
+		}
+	}
+	t.Fatalf("no tool call in %#v", msg.Content)
+	return ""
+}
+
+// An encrypted detail is a replayable signature and has to survive the round
+// trip attached to the tool call it belongs to.
+func TestEncryptedReasoningDetailAttachesToItsToolCall(t *testing.T) {
+	model, _ := serveSSE(t, reasoningDetailBody(
+		`{"type":"reasoning.encrypted","id":"call_1","data":"c2VjcmV0"}`))
+
+	_, msg := collect(Stream(context.Background(), model, simpleContext(),
+		&Options{StreamOptions: ai.StreamOptions{APIKey: "k"}}))
+
+	if got := thoughtOf(t, msg); !strings.Contains(got, "c2VjcmV0") {
+		t.Errorf("signature %q should carry the encrypted payload", got)
+	}
+}
+
+// The detail can arrive before the tool call it names, so it is held rather
+// than dropped.
+func TestReasoningDetailArrivingEarlyIsStillAttached(t *testing.T) {
+	body := chunk(`{"id":"c1","choices":[{"delta":{"reasoning_details":[{"type":"reasoning.encrypted","id":"call_1","data":"early"}]}}]}`) +
+		chunk(`{"id":"c1","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{}"}}]}}]}`) +
+		chunk(`{"id":"c1","choices":[{"delta":{},"finish_reason":"tool_calls"}]}`) +
+		"data: [DONE]\n\n"
+
+	model, _ := serveSSE(t, body)
+	_, msg := collect(Stream(context.Background(), model, simpleContext(),
+		&Options{StreamOptions: ai.StreamOptions{APIKey: "k"}}))
+
+	if got := thoughtOf(t, msg); !strings.Contains(got, "early") {
+		t.Errorf("a detail arriving before its tool call was dropped: %q", got)
+	}
+}
+
+// Only the encrypted form is replayable. Anything else either duplicates
+// thinking content already surfaced, or would be replayed as a signature that
+// verifies against nothing.
+func TestNonReplayableReasoningDetailsAreIgnored(t *testing.T) {
+	cases := []struct {
+		name   string
+		detail string
+	}{
+		{"plaintext, which OpenRouter sends for Anthropic",
+			`{"type":"reasoning.text","id":"call_1","text":"thinking out loud","format":"anthropic-claude-v1"}`},
+		{"encrypted but carrying no payload",
+			`{"type":"reasoning.encrypted","id":"call_1","data":""}`},
+		{"a future encrypted-ish type tau does not know how to replay",
+			`{"type":"reasoning.encrypted_v2","id":"call_1","data":"c2VjcmV0"}`},
+		{"encrypted with no tool call to attach to",
+			`{"type":"reasoning.encrypted","id":"","data":"c2VjcmV0"}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			model, _ := serveSSE(t, reasoningDetailBody(tc.detail))
+			_, msg := collect(Stream(context.Background(), model, simpleContext(),
+				&Options{StreamOptions: ai.StreamOptions{APIKey: "k"}}))
+
+			if got := thoughtOf(t, msg); got != "" {
+				t.Errorf("signature should be empty, got %q", got)
+			}
+		})
 	}
 }

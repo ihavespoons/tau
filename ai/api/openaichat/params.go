@@ -38,9 +38,10 @@ type streamOptions struct {
 }
 
 type tool struct {
-	Type     string      `json:"type"`
-	Function *toolFunc   `json:"function,omitempty"`
-	Custom   *toolCustom `json:"custom,omitempty"`
+	Type         string        `json:"type"`
+	Function     *toolFunc     `json:"function,omitempty"`
+	Custom       *toolCustom   `json:"custom,omitempty"`
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
 }
 
 type toolFunc struct {
@@ -128,6 +129,10 @@ func buildRequest(model *ai.Model, c ai.Context, opts *Options, cm compat) reque
 	}
 
 	applyTools(&req, model, c, cm)
+	// After applyTools, because the markers land on the tool list it produced.
+	if cc := compatCacheControl(cm, retention); cc != nil {
+		applyAnthropicCacheControl(req.Messages, req.Tools, cc)
+	}
 	applyThinking(&req, model, opts, cm)
 	applyRouting(&req, model)
 

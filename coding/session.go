@@ -83,6 +83,9 @@ type Session struct {
 	Commands *slashcmd.Registry
 	// UI is the host's interactive surface; never nil.
 	UI extension.UI
+	// Warnings are non-fatal startup problems — a malformed models.json, say.
+	// The session runs regardless; the host decides whether to show them.
+	Warnings []string
 
 	// mu guards allTools, which an extension may mutate from its own
 	// goroutine long after startup.
@@ -90,9 +93,13 @@ type Session struct {
 	// allTools is the full registered set, including tools an extension has
 	// deactivated — SetActiveTools selects from here.
 	allTools []agent.Tool
-	repo     session.Repo
-	store    auth.CredentialStore
-	opts     Options
+	repo session.Repo
+	// sessionID identifies the conversation to providers that key a cache or
+	// a backend affinity off it. It tracks Session across switches, so it is
+	// kept here rather than read back from disk per request.
+	sessionID string
+	store     auth.CredentialStore
+	opts      Options
 }
 
 // envExecOptions is the default shell configuration for extension-issued
@@ -162,7 +169,7 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 	}
 
 	store := auth.NewFileStore(config.AuthPath())
-	reg, err := buildModels(store)
+	reg, modelWarnings, err := BuildRegistry(store)
 	if err != nil {
 		return nil, err
 	}
@@ -187,6 +194,7 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 	cs := &Session{
 		Env: e, Model: model, Trust: tr, Cwd: cwd,
 		Models: reg, Settings: set, UI: ui, store: store, opts: opts,
+		Warnings: modelWarnings,
 	}
 
 	// Restore transcript from disk when resuming.
@@ -222,6 +230,7 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 		}
 		cs.Session = sess
 		cs.Path = meta.Path
+		cs.sessionID = meta.ID
 
 		if opts.Resume || opts.SessionPath != "" {
 			sctx, berr := sess.BuildContext(ctx)
@@ -313,20 +322,28 @@ func loadSettings(cwd string, trusted bool) (*settings.Resolved, error) {
 	return mgr.Resolve()
 }
 
-// buildModels composes the compiled provider catalog with ~/.tau/models.json.
+// BuildRegistry composes the compiled provider catalog with ~/.tau/models.json.
+//
 // A missing or malformed models.json is not fatal: the built-ins still work,
-// which matters because the file is hand-edited.
-func buildModels(store auth.CredentialStore) (*models.Registry, error) {
+// which matters because the file is hand-edited and losing every provider over
+// one stray comma would be the worse outcome. The problem is returned as a
+// warning rather than printed, so the caller decides where it surfaces.
+func BuildRegistry(store auth.CredentialStore) (*models.Registry, []string, error) {
 	builtins := []*provider.Provider{provider.Anthropic(store, auth.OSContext{})}
+
+	var warnings []string
 	cfg, err := models.LoadConfig(config.ModelsPath())
 	if err != nil {
+		warnings = append(warnings, err.Error())
 		cfg = nil
 	}
+
 	// The deps are what let a models.json-declared provider authenticate and
 	// stream, rather than merely appear in the catalog.
-	return models.NewRegistry(builtins, cfg, models.Deps{
+	reg, err := models.NewRegistry(builtins, cfg, models.Deps{
 		Store: store, Env: auth.OSContext{},
 	})
+	return reg, warnings, err
 }
 
 // resolveModel picks the model and thinking level for the run: explicit
@@ -365,6 +382,12 @@ func (s *Session) stream(ctx context.Context, model *ai.Model, c ai.Context, opt
 	if p == nil || p.StreamSimple == nil {
 		return errorStream(model, fmt.Errorf("no provider configured for %s", model.Provider))
 	}
+	// Attached here rather than at construction because a session switch
+	// changes it: providers use this to key a prompt cache and to pin a
+	// conversation to one backend, and a stale id silently costs cache hits.
+	if opts != nil && opts.SessionID == "" {
+		opts.SessionID = s.sessionID
+	}
 	return p.StreamSimple(ctx, model, c, opts)
 }
 
@@ -402,6 +425,22 @@ func (s *Session) Prompt(ctx context.Context, text string) ([]ai.Message, error)
 		Content:   ai.UserContent{Text: text},
 		Timestamp: nowMillis(),
 	})
+}
+
+// FormatUsage renders a usage summary for a human.
+//
+// The cache figures appear only when there are any, but when there are they
+// matter more than the input count: on a cached turn the input number is the
+// small remainder, and printing it alone makes a working cache look like a
+// broken token counter.
+func FormatUsage(u ai.Usage) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d in / %d out tokens", u.Input, u.Output)
+	if u.CacheRead > 0 || u.CacheWrite > 0 {
+		fmt.Fprintf(&b, " (cache %d read / %d write)", u.CacheRead, u.CacheWrite)
+	}
+	fmt.Fprintf(&b, ", $%.4f", u.Cost.Total)
+	return b.String()
 }
 
 // Usage sums token usage across the transcript.
