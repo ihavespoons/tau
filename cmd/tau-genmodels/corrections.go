@@ -276,3 +276,124 @@ func applyDeepSeekV4Compat(m *ai.Model) {
 	}
 	mergeCompat(m, &ai.CompatFlags{ThinkingFormat: strptr("deepseek")})
 }
+
+// xiaomiCompat: MiMo speaks DeepSeek's reasoning dialect, including its
+// insistence on the field being present on replayed assistant turns.
+func xiaomiCompat(c *ai.CompatFlags) {
+	c.RequiresReasoningContentOnAssistantMessages = boolptr(true)
+	c.ThinkingFormat = strptr("deepseek")
+}
+
+// qwenTokenPlanCompat: the Model Studio token-plan endpoints take Qwen's
+// enable_thinking toggle and reject the developer role and store.
+func qwenTokenPlanCompat(c *ai.CompatFlags) {
+	c.ThinkingFormat = strptr("qwen")
+	c.SupportsDeveloperRole = boolptr(false)
+	c.SupportsStore = boolptr(false)
+}
+
+// zaiToolStreamUnsupported are the GLM releases that predate tool streaming.
+var zaiToolStreamUnsupported = map[string]bool{
+	"glm-4.5": true, "glm-4.5-air": true, "glm-4.5-flash": true, "glm-4.5v": true,
+}
+
+// zaiGLM52ThinkingLevels: GLM-5.2 collapses the middle of the range onto one
+// setting rather than pretending to distinguish three.
+var zaiGLM52ThinkingLevels = ai.ThinkingLevelMap{
+	"minimal": nil, "low": strptr("high"), "medium": strptr("high"),
+	"high": strptr("high"), "max": strptr("max"),
+}
+
+func tweakZai(id string, _ modelsDevModel, out *ai.Model) {
+	mergeCompat(out, &ai.CompatFlags{
+		SupportsDeveloperRole: boolptr(false),
+		ThinkingFormat:        strptr("zai"),
+	})
+	if !zaiToolStreamUnsupported[id] {
+		mergeCompat(out, &ai.CompatFlags{ZaiToolStream: boolptr(true)})
+	}
+	if id == "glm-5.2" {
+		mergeCompat(out, &ai.CompatFlags{SupportsReasoningEffort: boolptr(true)})
+		out.ThinkingLevelMap = ai.ThinkingLevelMap{}
+		mergeThinkingLevelMap(out, zaiGLM52ThinkingLevels)
+	}
+}
+
+// Together classifies its models by how each expresses thinking, and the four
+// groups need genuinely different requests. A model in the wrong group either
+// ignores the thinking setting or rejects the request.
+var (
+	togetherReasoningOnly = map[string]bool{
+		"deepseek-ai/DeepSeek-R1": true, "MiniMaxAI/MiniMax-M2.7": true,
+	}
+	togetherReasoningEffort = map[string]bool{
+		"openai/gpt-oss-20b": true, "openai/gpt-oss-120b": true,
+	}
+	togetherToggleReasoningEffort = map[string]bool{"deepseek-ai/DeepSeek-V4-Pro": true}
+)
+
+// togetherBaseCompat is what every Together model needs regardless of group.
+func togetherBaseCompat(c *ai.CompatFlags) {
+	c.SupportsStore = boolptr(false)
+	c.SupportsDeveloperRole = boolptr(false)
+	c.SupportsReasoningEffort = boolptr(false)
+	c.MaxTokensField = strptr("max_tokens")
+	c.SupportsStrictMode = boolptr(false)
+	c.SupportsLongCacheRetention = boolptr(false)
+}
+
+func tweakTogether(id string, _ modelsDevModel, out *ai.Model) {
+	flags := &ai.CompatFlags{}
+	togetherBaseCompat(flags)
+
+	switch {
+	case !out.Reasoning:
+		// Nothing further: a non-reasoning model has no thinking dialect.
+	case togetherReasoningEffort[id]:
+		flags.SupportsReasoningEffort = boolptr(true)
+		flags.ThinkingFormat = strptr("openai")
+		out.ThinkingLevelMap = ai.ThinkingLevelMap{ai.ThinkingOff: nil, "minimal": nil}
+	case togetherToggleReasoningEffort[id]:
+		flags.ThinkingFormat = strptr("together")
+		flags.SupportsReasoningEffort = boolptr(true)
+		out.ThinkingLevelMap = ai.ThinkingLevelMap{
+			"minimal": nil, "low": nil, "medium": nil,
+			"high": strptr("high"), "xhigh": nil,
+		}
+	case togetherReasoningOnly[id]:
+		// Reasons unconditionally and takes no control at all.
+		out.ThinkingLevelMap = ai.ThinkingLevelMap{
+			ai.ThinkingOff: nil, "minimal": nil, "low": nil, "medium": nil,
+		}
+	default:
+		flags.ThinkingFormat = strptr("together")
+		out.ThinkingLevelMap = ai.ThinkingLevelMap{"minimal": nil, "low": nil, "medium": nil}
+	}
+
+	mergeCompat(out, flags)
+}
+
+// tweakFireworks splits the provider in two.
+//
+// Most of its catalog is served over an Anthropic-compatible endpoint where
+// caching is automatic prefix matching plus replica affinity — so the
+// marker-based controls are unavailable and the affinity header is what makes
+// caching work at all. GLM 5.2 is different: it comes through a router that
+// speaks chat-completions, and its compat block is replaced rather than
+// extended, because none of the Anthropic-side flags mean anything there.
+func tweakFireworks(id string, _ modelsDevModel, out *ai.Model) {
+	if strings.Contains(id, "glm-5p2") {
+		out.Api = ai.ApiOpenAICompletions
+		out.Compat = &ai.CompatFlags{
+			SupportsStore:         boolptr(false),
+			SupportsDeveloperRole: boolptr(false),
+		}
+		return
+	}
+	mergeCompat(out, &ai.CompatFlags{
+		SendSessionAffinityHeaders:      boolptr(true),
+		SupportsEagerToolInputStreaming: boolptr(false),
+		SupportsCacheControlOnTools:     boolptr(false),
+		SupportsLongCacheRetention:      boolptr(false),
+	})
+}

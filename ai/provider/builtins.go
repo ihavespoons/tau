@@ -3,7 +3,6 @@ package provider
 import (
 	"sort"
 
-	"github.com/ihavespoons/tau/ai"
 	"github.com/ihavespoons/tau/ai/auth"
 	"github.com/ihavespoons/tau/ai/provider/catalog"
 )
@@ -25,6 +24,15 @@ var builtinNames = map[string]string{
 	"openai":                "OpenAI",
 	"xai":                   "xAI",
 	"xiaomi":                "Xiaomi",
+	"xiaomi-token-plan-ams": "Xiaomi Token Plan (AMS)",
+	"xiaomi-token-plan-cn":  "Xiaomi Token Plan (CN)",
+	"xiaomi-token-plan-sgp": "Xiaomi Token Plan (SGP)",
+	"qwen-token-plan":       "Qwen Token Plan",
+	"qwen-token-plan-cn":    "Qwen Token Plan (CN)",
+	"together":              "Together AI",
+	"fireworks":             "Fireworks",
+	"zai":                   "Z.ai",
+	"zai-coding-cn":         "Z.ai (CN)",
 }
 
 // Builtins returns every provider tau ships with, in id order.
@@ -58,29 +66,16 @@ func builtin(id string, store auth.CredentialStore, env auth.EnvContext) *Provid
 		name = id
 	}
 
-	// Every model of a built-in provider shares its wire, so the first one
-	// names it.
-	api := ai.Api("")
 	baseURL := ""
 	if len(models) > 0 {
-		api, baseURL = models[0].Api, models[0].BaseURL
+		baseURL = models[0].BaseURL
 	}
 
-	switch api {
-	case ai.ApiOpenAICompletions:
-		return OpenAICompat(store, env, OpenAICompatOptions{
-			ID: id, Name: name, BaseURL: baseURL,
-			EnvKeys: auth.EnvKeysFor(id), Models: models,
-		})
-	case ai.ApiAnthropicMessages:
-		return AnthropicCompat(store, env, AnthropicCompatOptions{
-			ID: id, Name: name, BaseURL: baseURL,
-			EnvKeys: auth.EnvKeysFor(id), Models: models,
-		})
-	}
-
-	return &Provider{
-		ID: ai.ProviderId(id), Name: name, Api: api, BaseURL: baseURL,
+	// Keyed dispatches per model rather than per provider, so a catalog that
+	// spans two wires — Fireworks and xAI both do — routes each model to the
+	// right one, and a model on a wire tau has not built yet fails by name.
+	return Keyed(store, env, KeyedOptions{
+		ID: id, Name: name, BaseURL: baseURL,
 		EnvKeys: auth.EnvKeysFor(id), Models: models,
-	}
+	})
 }

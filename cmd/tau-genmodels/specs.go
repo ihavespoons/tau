@@ -71,12 +71,7 @@ func specs() []providerSpec {
 		{
 			Source: "xiaomi", ID: "xiaomi", Name: "Xiaomi",
 			Api: ai.ApiOpenAICompletions, BaseURL: "https://api.xiaomimimo.com/v1",
-			Tweak: withCompat(func(c *ai.CompatFlags) {
-				// MiMo speaks DeepSeek's reasoning dialect, including its
-				// insistence on the field being present on replayed turns.
-				c.RequiresReasoningContentOnAssistantMessages = boolptr(true)
-				c.ThinkingFormat = strptr("deepseek")
-			}),
+			Tweak: withCompat(xiaomiCompat),
 		},
 		{
 			Source: "cloudflare-workers-ai", ID: "cloudflare-workers-ai", Name: "Cloudflare Workers AI",
@@ -85,6 +80,65 @@ func specs() []providerSpec {
 			// affinity header a multi-turn conversation lands on a different
 			// one each time.
 			Tweak: withCompat(func(c *ai.CompatFlags) { c.SendSessionAffinityHeaders = boolptr(true) }),
+		},
+		{
+			Source: "zai-coding-plan", ID: "zai", Name: "Z.ai",
+			Api: ai.ApiOpenAICompletions, BaseURL: "https://api.z.ai/api/coding/paas/v4",
+			Tweak: tweakZai,
+		},
+		{
+			Source: "zai-coding-plan", ID: "zai-coding-cn", Name: "Z.ai (CN)",
+			Api: ai.ApiOpenAICompletions, BaseURL: "https://open.bigmodel.cn/api/coding/paas/v4",
+			Tweak: tweakZai,
+		},
+		{
+			Source: "together", SourceAlts: []string{"togetherai", "together-ai"},
+			ID: "together", Name: "Together AI",
+			Api: ai.ApiOpenAICompletions, BaseURL: "https://api.together.ai/v1",
+			Skip:  func(_ string, m modelsDevModel) bool { return m.Status == "deprecated" },
+			Tweak: tweakTogether,
+		},
+		{
+			Source: "fireworks-ai", ID: "fireworks", Name: "Fireworks",
+			// GLM 5.2 is served through a router that speaks chat-completions
+			// rather than the Anthropic-compatible endpoint the rest use.
+			PerModelBaseURL: func(id string) string {
+				if strings.Contains(id, "glm-5p2") {
+					return "https://api.fireworks.ai/inference/v1"
+				}
+				return ""
+			},
+			// Fireworks' Anthropic-compatible endpoint; the wire appends
+			// /v1/messages itself.
+			Api: ai.ApiAnthropicMessages, BaseURL: "https://api.fireworks.ai/inference",
+			Tweak: tweakFireworks,
+		},
+		{
+			Source: "alibaba-token-plan", ID: "qwen-token-plan", Name: "Qwen Token Plan",
+			Api:     ai.ApiOpenAICompletions,
+			BaseURL: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+			Tweak:   withCompat(qwenTokenPlanCompat),
+		},
+		{
+			Source: "alibaba-token-plan-cn", ID: "qwen-token-plan-cn", Name: "Qwen Token Plan (CN)",
+			Api:     ai.ApiOpenAICompletions,
+			BaseURL: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+			Tweak:   withCompat(qwenTokenPlanCompat),
+		},
+		{
+			Source: "xiaomi-token-plan-cn", ID: "xiaomi-token-plan-cn", Name: "Xiaomi Token Plan (CN)",
+			Api: ai.ApiOpenAICompletions, BaseURL: "https://token-plan-cn.xiaomimimo.com/v1",
+			Tweak: withCompat(xiaomiCompat),
+		},
+		{
+			Source: "xiaomi-token-plan-ams", ID: "xiaomi-token-plan-ams", Name: "Xiaomi Token Plan (AMS)",
+			Api: ai.ApiOpenAICompletions, BaseURL: "https://token-plan-ams.xiaomimimo.com/v1",
+			Tweak: withCompat(xiaomiCompat),
+		},
+		{
+			Source: "xiaomi-token-plan-sgp", ID: "xiaomi-token-plan-sgp", Name: "Xiaomi Token Plan (SGP)",
+			Api: ai.ApiOpenAICompletions, BaseURL: "https://token-plan-sgp.xiaomimimo.com/v1",
+			Tweak: withCompat(xiaomiCompat),
 		},
 	}
 }

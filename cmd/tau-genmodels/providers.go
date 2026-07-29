@@ -17,6 +17,10 @@ type providerSpec struct {
 	// Source is the models.dev provider key. Empty means the provider is not
 	// derived from models.dev at all.
 	Source string
+	// SourceAlts are further keys to try when Source is absent. models.dev has
+	// renamed providers more than once, and a rename would otherwise drop the
+	// whole catalog silently.
+	SourceAlts []string
 	// ID is tau's provider id, and the name of the generated catalog.
 	ID string
 	// Name is the display name.
@@ -44,6 +48,12 @@ type providerSpec struct {
 // the user a way to break their session.
 func (s providerSpec) build(cat modelsDevCatalog, opts *reasoningIndex) []ai.Model {
 	src, ok := cat[s.Source]
+	for _, alt := range s.SourceAlts {
+		if ok {
+			break
+		}
+		src, ok = cat[alt]
+	}
 	if !ok {
 		return nil
 	}

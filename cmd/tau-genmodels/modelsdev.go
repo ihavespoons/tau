@@ -24,20 +24,22 @@ type modelsDevProvider struct {
 // modelsDevModel is one model as models.dev describes it. Fields tau does not
 // consume are omitted; the ones here are the ones that reach a catalog entry.
 type modelsDevModel struct {
-	ID               string              `json:"id"`
-	Name             string              `json:"name"`
-	Family           string              `json:"family"`
-	Attachment       bool                `json:"attachment"`
-	Reasoning        bool                `json:"reasoning"`
-	ReasoningOptions []reasoningOption   `json:"reasoning_options"`
-	ToolCall         bool                `json:"tool_call"`
-	StructuredOutput bool                `json:"structured_output"`
-	Temperature      bool                `json:"temperature"`
-	OpenWeights      bool                `json:"open_weights"`
-	ReleaseDate      string              `json:"release_date"`
-	Modalities       modelsDevModalities `json:"modalities"`
-	Limit            modelsDevLimit      `json:"limit"`
-	Cost             modelsDevCost       `json:"cost"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Family           string            `json:"family"`
+	Attachment       bool              `json:"attachment"`
+	Reasoning        bool              `json:"reasoning"`
+	ReasoningOptions []reasoningOption `json:"reasoning_options"`
+	ToolCall         bool              `json:"tool_call"`
+	StructuredOutput bool              `json:"structured_output"`
+	Temperature      bool              `json:"temperature"`
+	OpenWeights      bool              `json:"open_weights"`
+	ReleaseDate      string            `json:"release_date"`
+	// Status marks a model upstream has retired; Together publishes it.
+	Status     string              `json:"status"`
+	Modalities modelsDevModalities `json:"modalities"`
+	Limit      modelsDevLimit      `json:"limit"`
+	Cost       modelsDevCost       `json:"cost"`
 }
 
 type modelsDevModalities struct {

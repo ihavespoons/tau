@@ -25,8 +25,20 @@ import (
 // a reason.
 
 // knownDivergences records where tau's catalog intentionally differs from
-// Pi's, keyed by "provider/model" or "provider" for a whole catalog.
-var knownDivergences = map[string]string{}
+// Pi's, keyed by "provider/model#field" for one field or "provider/model" for
+// a whole model. Every entry needs a reason, and an entry that stops matching
+// anything is reported so the list cannot rot into a set of excuses for bugs
+// that were fixed years ago.
+var knownDivergences = map[string]string{
+	"together/MiniMaxAI/MiniMax-M2.7#compat": "Pi keeps two copies of chat-completions detection " +
+		"and they have drifted: the generator's copy withholds thinkingFormat for Together's " +
+		"reasoning-only models, its runtime copy does not. Since the catalog value only ever " +
+		"overrides detection with the same string, both agree on the wire — so tau records what " +
+		"detection concludes rather than reproducing the omission.",
+}
+
+// usedDivergences records which entries actually suppressed a difference.
+var usedDivergences = map[string]bool{}
 
 // notYetGenerated lists providers whose catalogs tau does not build yet. They
 // are named rather than skipped silently, so the remaining work is visible in
@@ -37,7 +49,6 @@ var notYetGenerated = map[string]string{
 	"azure-openai-responses": "needs the azure-openai-responses wire",
 	"cloudflare-ai-gateway":  "multi-api provider: routes to three wires by model",
 	"deepseek":               "hand-written model list, not derived from models.dev",
-	"fireworks":              "needs per-model account path in the base URL",
 	"github-copilot":         "needs the authenticated copilot catalog",
 	"google-vertex":          "needs the google-vertex wire",
 	"kimi-coding":            "hand-written model list, not derived from models.dev",
@@ -47,14 +58,6 @@ var notYetGenerated = map[string]string{
 	"openai-codex":           "hand-written model list, not derived from models.dev",
 	"opencode":               "needs the opencode zen catalog",
 	"opencode-go":            "needs the opencode zen catalog",
-	"qwen-token-plan":        "hand-written model list, not derived from models.dev",
-	"qwen-token-plan-cn":     "hand-written model list, not derived from models.dev",
-	"together":               "needs the per-model reasoning classification tables",
-	"xiaomi-token-plan-ams":  "hand-written model list, not derived from models.dev",
-	"xiaomi-token-plan-cn":   "hand-written model list, not derived from models.dev",
-	"xiaomi-token-plan-sgp":  "hand-written model list, not derived from models.dev",
-	"zai":                    "needs the glm thinking-level tables",
-	"zai-coding-cn":          "needs the glm thinking-level tables",
 }
 
 // loadGolden reads Pi's catalog for one provider.
@@ -108,7 +111,9 @@ func TestCatalogMatchesPi(t *testing.T) {
 			}
 
 			for id, want := range golden {
-				if _, ok := knownDivergences[providerID+"/"+id]; ok {
+				key := providerID + "/" + id
+				if _, ok := knownDivergences[key]; ok {
+					usedDivergences[key] = true
 					continue
 				}
 				got, ok := byID[id]
@@ -117,6 +122,11 @@ func TestCatalogMatchesPi(t *testing.T) {
 					continue
 				}
 				for _, d := range diffModel(want, got) {
+					fieldKey := key + "#" + d.field
+					if _, ok := knownDivergences[fieldKey]; ok {
+						usedDivergences[fieldKey] = true
+						continue
+					}
 					t.Errorf("%s: %s", id, d)
 				}
 			}
@@ -135,11 +145,23 @@ func TestCatalogMatchesPi(t *testing.T) {
 // diffModel reports every field that differs, rather than stopping at the
 // first: fixing a generator bug usually fixes a whole class of them, and
 // seeing the class is what tells you which correction is missing.
-func diffModel(want, got ai.Model) []string {
-	var diffs []string
+// difference is one field that does not match, kept structured so a known
+// divergence can be scoped to a single field instead of a whole model.
+type difference struct {
+	field string
+	text  string
+}
+
+func (d difference) String() string { return d.text }
+
+func diffModel(want, got ai.Model) []difference {
+	var diffs []difference
 	cmp := func(field string, w, g any) {
 		if !reflect.DeepEqual(w, g) {
-			diffs = append(diffs, fmt.Sprintf("%s: pi=%v tau=%v", field, w, g))
+			diffs = append(diffs, difference{
+				field: field,
+				text:  fmt.Sprintf("%s: pi=%v tau=%v", field, w, g),
+			})
 		}
 	}
 
@@ -167,6 +189,19 @@ func jsonOf(v any) string {
 		return fmt.Sprintf("<unmarshalable: %v>", err)
 	}
 	return string(b)
+}
+
+// A divergence that no longer suppresses anything is a stale excuse, and the
+// next real difference in that field would be silently swallowed by it.
+func TestNoStaleDivergences(t *testing.T) {
+	if len(usedDivergences) == 0 {
+		t.Skip("run alongside TestCatalogMatchesPi")
+	}
+	for key := range knownDivergences {
+		if !usedDivergences[key] {
+			t.Errorf("%q no longer diverges — remove it", key)
+		}
+	}
 }
 
 // Every generated catalog must be reachable through the index, or a provider
