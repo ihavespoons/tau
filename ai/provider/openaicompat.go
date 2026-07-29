@@ -76,9 +76,16 @@ func OpenAICompatAuth(providerID, name string, envKeys []string) auth.ProviderAu
 // providers: stored credential first, then models.json, then ambient
 // environment. Anthropic proper does not use it — it has an OAuth flow and a
 // base-URL redirect that do not fit this shape.
-func keyResolver(store auth.CredentialStore, env auth.EnvContext, id, name string, envKeys []string, configuredKey string) func(context.Context, *ai.Model, *ai.StreamOptions) error {
+func keyResolver(store auth.CredentialStore, env auth.EnvContext, id, name string, envKeys []string, configuredKey string, oauthFlow ...auth.OAuthAuth) func(context.Context, *ai.Model, *ai.StreamOptions) error {
 	providerAuth := auth.ProviderAuth{
 		APIKey: auth.EnvAPIKeyAuth(id, name+" API key", envKeys, configuredKey),
+	}
+	// A provider may offer both a key and a login; resolution takes whichever
+	// the user actually completed.
+	for _, flow := range oauthFlow {
+		if flow != nil {
+			providerAuth.OAuth = flow
+		}
 	}
 
 	return func(ctx context.Context, _ *ai.Model, opts *ai.StreamOptions) error {

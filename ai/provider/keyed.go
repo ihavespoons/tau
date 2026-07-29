@@ -23,6 +23,9 @@ type KeyedOptions struct {
 	Models  []ai.Model
 	// ConfiguredKey is an apiKey value from models.json: a literal or a `$VAR`.
 	ConfiguredKey string
+	// OAuth is the provider's login flow, when it has one. A provider with
+	// both takes whichever the user completed.
+	OAuth auth.OAuthAuth
 }
 
 // Keyed builds a provider that dispatches each request to the wire its MODEL
@@ -46,7 +49,7 @@ func Keyed(store auth.CredentialStore, env auth.EnvContext, o KeyedOptions) *Pro
 	// for display and for callers that have no model in hand.
 	p.Api = dominantApi(o.Models)
 
-	apply := keyResolver(store, env, o.ID, p.Name, o.EnvKeys, o.ConfiguredKey)
+	apply := keyResolver(store, env, o.ID, p.Name, o.EnvKeys, o.ConfiguredKey, o.OAuth)
 
 	p.StreamSimple = func(ctx context.Context, model *ai.Model, c ai.Context, opts *ai.SimpleStreamOptions) *ai.MessageStream {
 		if opts == nil {

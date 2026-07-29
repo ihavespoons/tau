@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"github.com/ihavespoons/tau/ai/auth"
+	"github.com/ihavespoons/tau/ai/auth/oauth"
 	"github.com/ihavespoons/tau/ai/provider/catalog"
 )
 
@@ -91,5 +92,17 @@ func builtin(id string, store auth.CredentialStore, env auth.EnvContext) *Provid
 	return Keyed(store, env, KeyedOptions{
 		ID: id, Name: name, BaseURL: baseURL,
 		EnvKeys: auth.EnvKeysFor(id), Models: models,
+		OAuth: builtinOAuth(id),
 	})
+}
+
+// builtinOAuth returns a provider's login flow, when tau implements one.
+//
+// A provider without one is not broken: an API key still works. The flow is
+// what makes a subscription usable, which for Copilot is the only way in.
+func builtinOAuth(id string) auth.OAuthAuth {
+	if id == "github-copilot" {
+		return oauth.NewCopilot()
+	}
+	return nil
 }
