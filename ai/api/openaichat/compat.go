@@ -16,12 +16,12 @@ import (
 // Thinking formats. Providers express "reason harder" a dozen different ways;
 // each constant names one dialect (Pi's OpenAICompletionsCompat.thinkingFormat).
 const (
-	thinkingOpenAI      = "openai"            // reasoning_effort: "high"
-	thinkingOpenRouter  = "openrouter"        // reasoning: { effort }
-	thinkingDeepSeek    = "deepseek"          // thinking: { type } + reasoning_effort
-	thinkingTogether    = "together"          // reasoning: { enabled } + reasoning_effort
-	thinkingZai         = "zai"               // thinking: { type, clear_thinking }
-	thinkingQwen        = "qwen"              // enable_thinking: bool
+	thinkingOpenAI      = "openai"             // reasoning_effort: "high"
+	thinkingOpenRouter  = "openrouter"         // reasoning: { effort }
+	thinkingDeepSeek    = "deepseek"           // thinking: { type } + reasoning_effort
+	thinkingTogether    = "together"           // reasoning: { enabled } + reasoning_effort
+	thinkingZai         = "zai"                // thinking: { type, clear_thinking }
+	thinkingQwen        = "qwen"               // enable_thinking: bool
 	thinkingQwenChatTpl = "qwen-chat-template" // chat_template_kwargs
 	thinkingChatTpl     = "chat-template"      // configurable chat_template_kwargs
 	thinkingString      = "string-thinking"    // thinking: "high"
@@ -72,10 +72,10 @@ type compat struct {
 // two or three times inside larger boolean expressions and the duplication is
 // where a porting error would hide.
 type hostFacts struct {
-	zai, together, moonshot, openRouter    bool
-	cloudflareWorkers, cloudflareGateway   bool
-	nvidia, antLing, grok, deepSeek        bool
-	cerebras, chutes, opencode             bool
+	zai, together, moonshot, openRouter  bool
+	cloudflareWorkers, cloudflareGateway bool
+	nvidia, antLing, grok, deepSeek      bool
+	cerebras, chutes, opencode           bool
 }
 
 func observe(model *ai.Model) hostFacts {
@@ -156,14 +156,14 @@ func detectCompat(model *ai.Model) compat {
 		SupportsDeveloperRole: openRouterDeveloperRole || (!nonStandard && !f.openRouter),
 		SupportsReasoningEffort: !f.grok && !f.zai && !f.moonshot && !f.together &&
 			!f.cloudflareGateway && !f.nvidia && !f.antLing,
-		SupportsUsageInStreaming: true,
-		MaxTokensField:           maxTokensField,
+		SupportsUsageInStreaming:                    true,
+		MaxTokensField:                              maxTokensField,
 		RequiresReasoningContentOnAssistantMessages: f.deepSeek,
-		ThinkingFormat:     thinkingFormat,
-		ChatTemplateKwargs: map[string]any{},
-		SupportsStrictMode: !f.moonshot && !f.together && !f.cloudflareGateway && !f.nvidia,
-		CacheControlFormat: cacheControlFormat,
-		SessionAffinityFormat: affinity,
+		ThinkingFormat:                              thinkingFormat,
+		ChatTemplateKwargs:                          map[string]any{},
+		SupportsStrictMode:                          !f.moonshot && !f.together && !f.cloudflareGateway && !f.nvidia,
+		CacheControlFormat:                          cacheControlFormat,
+		SessionAffinityFormat:                       affinity,
 		SupportsLongCacheRetention: !(f.together || f.cloudflareWorkers ||
 			f.cloudflareGateway || f.nvidia || f.antLing),
 	}
