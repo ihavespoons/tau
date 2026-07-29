@@ -1,8 +1,14 @@
-package anthropic
-
-// Ports of Pi's shared api helpers (transform-messages.ts, deferred-tools.ts,
-// sanitize-unicode.ts). These live here unexported until a second wire API
-// needs them, at which point they should move to a shared internal package.
+// Package apishared holds the helpers every wire API needs: the message
+// transform Pi applies before any provider-specific conversion, deferred-tool
+// splitting, and unicode sanitization.
+//
+// These lived inside the anthropic package until a second wire API needed
+// them. Keeping one copy matters more than the import: transformMessages
+// decides what a provider is even allowed to see — dropping errored turns,
+// synthesizing results for orphaned tool calls, downgrading images for
+// non-vision models — and two copies would drift into two different
+// conversations for the same transcript.
+package apishared
 
 import (
 	"time"
@@ -20,7 +26,7 @@ const (
 // UTF-8 bytes. Go strings normally cannot contain lone surrogates (the JSON
 // decoder replaces them with U+FFFD), so this mostly guards strings built from
 // raw bytes.
-func sanitizeSurrogates(s string) string {
+func SanitizeSurrogates(s string) string {
 	if utf8.ValidString(s) {
 		return s
 	}
@@ -80,12 +86,12 @@ func downgradeUnsupportedImages(messages ai.MessageList, model *ai.Model) ai.Mes
 	return out
 }
 
-// transformMessages is the port of Pi's transformMessages: downgrades images
+// TransformMessages is the port of Pi's transformMessages: downgrades images
 // for non-vision models, converts cross-model thinking blocks to text, drops
 // redacted thinking cross-model, normalizes cross-model tool-call ids, skips
 // errored/aborted assistant turns, and synthesizes tool results for orphaned
 // tool calls.
-func transformMessages(messages ai.MessageList, model *ai.Model, normalizeID func(string) string) ai.MessageList {
+func TransformMessages(messages ai.MessageList, model *ai.Model, normalizeID func(string) string) ai.MessageList {
 	toolCallIDMap := map[string]string{}
 	imageAware := downgradeUnsupportedImages(messages, model)
 
@@ -115,7 +121,7 @@ func transformMessages(messages ai.MessageList, model *ai.Model, normalizeID fun
 						content = append(content, b)
 						continue
 					}
-					if trimSpace(b.Thinking) == "" {
+					if TrimSpace(b.Thinking) == "" {
 						continue
 					}
 					if isSameModel {
@@ -209,9 +215,9 @@ func transformMessages(messages ai.MessageList, model *ai.Model, normalizeID fun
 	return result
 }
 
-// splitDeferredTools ports Pi's deferred-tools.ts: tools first referenced by a
+// SplitDeferredTools ports Pi's deferred-tools.ts: tools first referenced by a
 // transcript ToolResultMessage.AddedToolNames (and not yet used) are deferred.
-func splitDeferredTools(c ai.Context, enabled bool, normalizeName func(string) string) (immediate []ai.Tool, deferred []ai.Tool) {
+func SplitDeferredTools(c ai.Context, enabled bool, normalizeName func(string) string) (immediate []ai.Tool, deferred []ai.Tool) {
 	if normalizeName == nil {
 		normalizeName = func(s string) string { return s }
 	}
@@ -266,7 +272,9 @@ func splitDeferredTools(c ai.Context, enabled bool, normalizeName func(string) s
 	return immediate, deferred
 }
 
-func trimSpace(s string) string {
+// TrimSpace trims ASCII whitespace, matching JavaScript's String.trim() for
+// the byte range Pi actually encounters.
+func TrimSpace(s string) string {
 	start, end := 0, len(s)
 	for start < end && isSpace(s[start]) {
 		start++
