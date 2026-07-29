@@ -35,7 +35,7 @@ go install github.com/ihavespoons/tau/cmd/tau@latest
 ## Use
 
 ```sh
-tau login                  # Claude Pro/Max OAuth, or an API key
+tau login                  # Claude Pro/Max OAuth, or an API key with -k
 tau                        # interactive session in the current directory
 tau -c                     # …continuing the most recent one
 tau -p "fix the failing test"    # one-shot, non-interactive
@@ -71,12 +71,21 @@ whether it needs cache markers, which wire it actually speaks.
 Not every wire is implemented yet — a model on one tau cannot talk to is
 listed and selectable, and says so by name rather than pretending not to exist.
 Live today: Anthropic messages, OpenAI chat-completions, OpenAI responses,
-Azure OpenAI, Gemini, Vertex AI, and Mistral — between them, most of the
-catalog. Still to come: Bedrock and the Codex backend.
+Azure OpenAI, Gemini, Vertex AI, Mistral, and the ChatGPT Codex backend —
+between them, nearly the whole catalog. Still to come: Bedrock.
+
+Three providers have a login rather than a key:
+
+```sh
+tau login                    # Anthropic — Claude Pro/Max
+tau login github-copilot     # device flow
+tau login openai-codex       # ChatGPT subscription
+```
 
 Vertex authenticates with Application Default Credentials, so
 `gcloud auth application-default login` is enough; set `GOOGLE_CLOUD_PROJECT`
-and `GOOGLE_CLOUD_LOCATION`. GitHub Copilot uses a device login (`tau login`).
+and `GOOGLE_CLOUD_LOCATION`. Everything else takes an API key from the
+environment.
 
 Anything not listed that speaks `/v1/chat/completions` — vLLM, llama.cpp,
 LiteLLM, Ollama, a private gateway — can be declared in

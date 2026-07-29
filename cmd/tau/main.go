@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -45,7 +46,7 @@ func run(args []string) error {
 		case "login":
 			return login(args[1:])
 		case "logout":
-			return logout()
+			return logout(args[1:])
 		case "models":
 			return listModels()
 		case "sessions":
@@ -89,8 +90,9 @@ usage:
   tau -c                 continue the most recent session here
   tau -p "prompt"        run the agent (non-interactive)
   tau -p -c "prompt"     continue the most recent session here
-  tau login              authenticate with Anthropic (Claude Pro/Max OAuth or API key)
-  tau logout             remove stored credentials
+  tau login [provider]   log in (default: anthropic; also github-copilot, openai-codex)
+  tau login -k           store an API key instead
+  tau logout [provider]  remove stored credentials
   tau models             list available models
   tau sessions           list sessions for this directory
   tau --version
@@ -323,13 +325,18 @@ func listModels() error {
 	return nil
 }
 
-func logout() error {
+func logout(args []string) error {
+	provider := "anthropic"
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		provider = args[0]
+	}
+
 	ctx, cancel := ctxWithSignals()
 	defer cancel()
-	if err := store().Delete(ctx, "anthropic"); err != nil {
+	if err := store().Delete(ctx, provider); err != nil {
 		return err
 	}
-	fmt.Println("Removed stored Anthropic credentials.")
+	fmt.Printf("Removed stored %s credentials.\n", provider)
 	return nil
 }
 
@@ -373,8 +380,36 @@ func (c cliInteraction) Notify(ev auth.Event) {
 	}
 }
 
+// loginFlows are the providers tau can log in to interactively. Everything
+// else authenticates with an API key from the environment, which needs no
+// command.
+var loginFlows = map[string]func() auth.OAuthAuth{
+	"anthropic":      func() auth.OAuthAuth { return oauth.NewAnthropic() },
+	"github-copilot": func() auth.OAuthAuth { return oauth.NewCopilot() },
+	"openai-codex":   func() auth.OAuthAuth { return oauth.NewCodex() },
+}
+
+func loginProviders() []string {
+	ids := make([]string, 0, len(loginFlows))
+	for id := range loginFlows {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 func login(args []string) error {
-	useKey := len(args) > 0 && (args[0] == "--api-key" || args[0] == "-k")
+	useKey := false
+	provider := "anthropic"
+	for _, arg := range args {
+		switch {
+		case arg == "--api-key" || arg == "-k":
+			useKey = true
+		case !strings.HasPrefix(arg, "-"):
+			provider = arg
+		}
+	}
+
 	ctx, cancel := ctxWithSignals()
 	defer cancel()
 
@@ -383,7 +418,7 @@ func login(args []string) error {
 
 	if useKey {
 		key, err := in.Prompt(ctx, auth.Prompt{
-			Type: auth.PromptSecret, Message: "Paste your Anthropic API key:",
+			Type: auth.PromptSecret, Message: "Paste your " + provider + " API key:",
 		})
 		if err != nil {
 			return err
@@ -391,7 +426,7 @@ func login(args []string) error {
 		if key == "" {
 			return errors.New("no key entered")
 		}
-		if _, err := s.Modify(ctx, "anthropic", func(*auth.Credential) (*auth.Credential, error) {
+		if _, err := s.Modify(ctx, provider, func(*auth.Credential) (*auth.Credential, error) {
 			return &auth.Credential{Type: auth.CredentialAPIKey, Key: key}, nil
 		}); err != nil {
 			return err
@@ -400,7 +435,13 @@ func login(args []string) error {
 		return nil
 	}
 
-	if err := oauth.Login(ctx, oauth.NewAnthropic(), s, "anthropic", in); err != nil {
+	flow, ok := loginFlows[provider]
+	if !ok {
+		return fmt.Errorf("no login flow for %q — tau can log in to: %s\n"+
+			"every other provider takes an API key from the environment",
+			provider, strings.Join(loginProviders(), ", "))
+	}
+	if err := oauth.Login(ctx, flow(), s, provider, in); err != nil {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, "Logged in. Credentials saved to "+config.AuthPath())
