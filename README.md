@@ -53,8 +53,16 @@ length costs nothing to render.
 
 ## Other providers
 
-Anthropic is built in. Anything that speaks `/v1/chat/completions` — OpenRouter,
-Groq, DeepSeek, Together, vLLM, llama.cpp, LiteLLM, Ollama — can be declared in
+Twelve providers ship compiled in — Anthropic, OpenAI, Google, Groq, Cerebras,
+xAI, Mistral, Moonshot, Xiaomi, Hugging Face, and Cloudflare Workers AI. Set the
+provider's API key environment variable and its models appear in `tau models`,
+ready to select. Model data is generated from models.dev and diffed against
+Pi's own catalog, so the per-model quirks — which thinking levels a model
+accepts, which token field it wants, where its pricing tier changes — come
+along with it.
+
+Anything else that speaks `/v1/chat/completions` — OpenRouter, DeepSeek,
+Together, vLLM, llama.cpp, LiteLLM, Ollama — can be declared in
 `~/.tau/agent/models.json` and used immediately:
 
 ```jsonc
@@ -87,8 +95,10 @@ Omitting `api` assumes `openai-completions`, which is what nearly every endpoint
 speaks; the per-provider quirks (reasoning dialect, cache markers, role names,
 token-field spelling) are detected from the provider id and base URL.
 
-Model metadata has to be written out by hand for now — the generated catalogs
-that make providers work with no configuration are still to come.
+Providers whose model lists come from their own endpoints rather than
+models.dev — OpenRouter and the Vercel gateway among them — still need to be
+declared this way. To regenerate the compiled catalogs after an upstream
+change: `go run ./cmd/tau-genmodels -refresh`.
 
 ## MCP
 
