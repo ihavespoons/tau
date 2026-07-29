@@ -36,10 +36,18 @@ type providerSpec struct {
 	Tweak func(id string, m modelsDevModel, out *ai.Model)
 	// PerModelBaseURL overrides BaseURL for models that need their own.
 	PerModelBaseURL func(id string) string
+	// PerModelWire overrides Api and BaseURL together, for aggregators whose
+	// catalog spans several wires. Returning an empty Api keeps the defaults.
+	PerModelWire func(id string, m modelsDevModel) (ai.Api, string)
 	// Rename folds an upstream id onto a different one, returning the new id
 	// and optionally a new display name. Upstream sometimes publishes several
 	// versioned aliases for one served model.
 	Rename func(id string) (string, string)
+	// CostTiers carries models.dev's context-tier pricing into the catalog.
+	CostTiers bool
+	// DefaultLimits replace the generic 4096 fallback for a provider that
+	// serves larger models than an unspecified limit would suggest.
+	DefaultLimits modelLimits
 	// Extra are models the provider serves that models.dev does not describe.
 	// They still go through the correction passes.
 	Extra []ai.Model
@@ -80,11 +88,24 @@ func (s providerSpec) build(cat modelsDevCatalog, opts *reasoningIndex) []ai.Mod
 			continue
 		}
 
-		baseURL := s.BaseURL
+		api, baseURL := s.Api, s.BaseURL
 		if s.PerModelBaseURL != nil {
 			if u := s.PerModelBaseURL(id); u != "" {
 				baseURL = u
 			}
+		}
+		if s.PerModelWire != nil {
+			if a, u := s.PerModelWire(id, m); a != "" {
+				api, baseURL = a, u
+			}
+		}
+
+		// Tiered pricing is opt-in: models.dev publishes context tiers for many
+		// models whose providers do not actually bill them that way, so
+		// carrying them everywhere would over-report cost.
+		cost := ai.ModelCost{ModelCostRates: m.rates()}
+		if s.CostTiers {
+			cost = m.cost()
 		}
 
 		modelID, renamedTo := id, ""
@@ -95,14 +116,14 @@ func (s providerSpec) build(cat modelsDevCatalog, opts *reasoningIndex) []ai.Mod
 		model := ai.Model{
 			ID:            modelID,
 			Name:          m.displayName(modelID),
-			Api:           s.Api,
+			Api:           api,
 			Provider:      ai.ProviderId(s.ID),
 			BaseURL:       baseURL,
 			Reasoning:     m.Reasoning,
 			Input:         m.inputModalities(),
-			Cost:          ai.ModelCost{ModelCostRates: m.rates()},
-			ContextWindow: m.contextWindow(),
-			MaxTokens:     m.maxTokens(),
+			Cost:          cost,
+			ContextWindow: m.contextWindowOr(s.DefaultLimits.ContextWindow),
+			MaxTokens:     m.maxTokensOr(s.DefaultLimits.MaxTokens),
 		}
 		if renamedTo != "" {
 			model.Name = renamedTo
@@ -199,4 +220,10 @@ func dedupeRenamed(models []ai.Model, renamed map[string]bool) []ai.Model {
 		}
 	}
 	return out
+}
+
+// modelLimits are a provider's fallbacks for models that declare none.
+type modelLimits struct {
+	ContextWindow int
+	MaxTokens     int
 }

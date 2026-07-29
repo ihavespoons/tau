@@ -308,7 +308,14 @@ func (s *Session) Close(ctx context.Context, reason string) {
 
 // DefaultModel is the model tau picks when neither the caller nor settings
 // name one.
-const DefaultModel = "claude-sonnet-5"
+//
+// It is provider-qualified deliberately. A bare id is ambiguous once the
+// compiled catalog spans every provider — a dozen of them resell
+// claude-sonnet-5 — and the resolver's tie-break is a sort over ids, which
+// would silently start the session on whichever reseller happened to sort
+// highest. A user typing a bare id still gets that behaviour, which is Pi's;
+// tau's own default must not depend on it.
+const DefaultModel = "anthropic/claude-sonnet-5"
 
 // loadSettings reads the merged configuration. The project scope is gated on
 // the trust decision: an untrusted directory's settings.json is not read.

@@ -36,7 +36,13 @@ type modelsDevModel struct {
 	OpenWeights      bool              `json:"open_weights"`
 	ReleaseDate      string            `json:"release_date"`
 	// Status marks a model upstream has retired; Together publishes it.
-	Status     string              `json:"status"`
+	Status string `json:"status"`
+	// Provider names the SDK an aggregator proxies this model through. It is
+	// how a router says which wire each of its models speaks, and taking the
+	// wire from the provider instead would misroute a third of some catalogs.
+	Provider struct {
+		NPM string `json:"npm"`
+	} `json:"provider"`
 	Modalities modelsDevModalities `json:"modalities"`
 	Limit      modelsDevLimit      `json:"limit"`
 	Cost       modelsDevCost       `json:"cost"`
@@ -56,10 +62,23 @@ type modelsDevLimit struct {
 // provider that publishes no cache rate is not a provider whose cache is free,
 // and at least one correction (Mistral's) turns on exactly that distinction.
 type modelsDevCost struct {
+	Input      *float64            `json:"input"`
+	Output     *float64            `json:"output"`
+	CacheRead  *float64            `json:"cache_read"`
+	CacheWrite *float64            `json:"cache_write"`
+	Tiers      []modelsDevCostTier `json:"tiers"`
+}
+
+// modelsDevCostTier is a rate that applies past a context threshold.
+type modelsDevCostTier struct {
 	Input      *float64 `json:"input"`
 	Output     *float64 `json:"output"`
 	CacheRead  *float64 `json:"cache_read"`
 	CacheWrite *float64 `json:"cache_write"`
+	Tier       struct {
+		Type string `json:"type"`
+		Size *int   `json:"size"`
+	} `json:"tier"`
 }
 
 func costOrZero(v *float64) float64 {
@@ -67,6 +86,30 @@ func costOrZero(v *float64) float64 {
 		return 0
 	}
 	return *v
+}
+
+// cost is the model's full pricing, including any context tiers.
+//
+// Only context tiers are carried: models.dev also describes tiers keyed on
+// other things, and a tier tau cannot evaluate would silently mis-price a
+// request rather than being ignored.
+func (m modelsDevModel) cost() ai.ModelCost {
+	out := ai.ModelCost{ModelCostRates: m.rates()}
+	for _, t := range m.Cost.Tiers {
+		if t.Tier.Type != "context" || t.Tier.Size == nil {
+			continue
+		}
+		out.Tiers = append(out.Tiers, ai.ModelCostTier{
+			InputTokensAbove: *t.Tier.Size,
+			ModelCostRates: ai.ModelCostRates{
+				Input:      costOrZero(t.Input),
+				Output:     costOrZero(t.Output),
+				CacheRead:  costOrZero(t.CacheRead),
+				CacheWrite: costOrZero(t.CacheWrite),
+			},
+		})
+	}
+	return out
 }
 
 // rates is the model's pricing as the catalog records it.
@@ -117,19 +160,27 @@ func (m modelsDevModel) inputModalities() []string {
 	return []string{"text"}
 }
 
-// contextWindow and maxTokens fall back to 4096, matching Pi: a model with no
-// declared limit is assumed small rather than unbounded, so a missing value
-// cannot cause an over-long request.
-func (m modelsDevModel) contextWindow() int {
+// contextWindowOr and maxTokensOr fall back to 4096, matching Pi: a model with
+// no declared limit is assumed small rather than unbounded, so a missing value
+// cannot cause an over-long request. A provider may supply its own floor, since
+// a gateway that only serves large models is better described by that than by
+// the generic one.
+func (m modelsDevModel) contextWindowOr(fallback int) int {
 	if m.Limit.Context > 0 {
 		return m.Limit.Context
+	}
+	if fallback > 0 {
+		return fallback
 	}
 	return 4096
 }
 
-func (m modelsDevModel) maxTokens() int {
+func (m modelsDevModel) maxTokensOr(fallback int) int {
 	if m.Limit.Output > 0 {
 		return m.Limit.Output
+	}
+	if fallback > 0 {
+		return fallback
 	}
 	return 4096
 }

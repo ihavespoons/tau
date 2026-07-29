@@ -108,6 +108,12 @@ func buildAll(cat modelsDevCatalog, dataDir string) (map[string][]ai.Model, erro
 		}
 	}
 
+	// Azure is derived from the finished OpenAI catalog rather than from
+	// models.dev, and before the correction passes so both get the same ones.
+	if azure := cloneForAzure(out["openai"]); len(azure) > 0 {
+		out["azure-openai-responses"] = azure
+	}
+
 	// Corrections run after every provider is built, because several of them
 	// depend on the finished model rather than on its models.dev source.
 	for _, models := range out {

@@ -72,9 +72,6 @@ func tweakOpenAI(id string, _ modelsDevModel, out *ai.Model) {
 	if id == "gpt-5-pro" {
 		out.MaxTokens = 128000
 	}
-	if openAIToolSearch[id] {
-		mergeCompat(out, &ai.CompatFlags{SupportsToolSearch: boolptr(true)})
-	}
 }
 
 // xaiExcluded lists the models tau does not offer: superseded releases and the
@@ -638,4 +635,387 @@ func hasModality(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// opencodeLongCacheUnsupported are the opencode models whose backend does not
+// honour extended cache retention, keyed "provider:model".
+var opencodeLongCacheUnsupported = map[string]bool{
+	"opencode:deepseek-v4-flash": true,
+	"opencode:deepseek-v4-pro":   true,
+	"opencode:kimi-k2.5":         true,
+	"opencode:kimi-k2.6":         true,
+	"opencode:minimax-m2.7":      true,
+	"opencode-go:kimi-k2.6":      true,
+}
+
+// opencodeWire picks the wire for one opencode model.
+//
+// opencode is a router: models.dev records which SDK it proxies each model
+// through, and that determines the wire and the path. Getting it from the
+// provider instead would send a third of the catalog to the wrong parser.
+func opencodeWire(basePath string) func(string, modelsDevModel) (ai.Api, string) {
+	return func(id string, m modelsDevModel) (ai.Api, string) {
+		switch m.Provider.NPM {
+		case "@ai-sdk/openai":
+			return ai.ApiOpenAIResponses, basePath + "/v1"
+		case "@ai-sdk/anthropic":
+			// The Anthropic wire appends /v1/messages itself.
+			return ai.ApiAnthropicMessages, basePath
+		case "@ai-sdk/google":
+			return ai.ApiGoogleGenerativeAI, basePath + "/v1"
+		default:
+			// null, undefined, @ai-sdk/openai-compatible, @ai-sdk/alibaba.
+			return ai.ApiOpenAICompletions, basePath + "/v1"
+		}
+	}
+}
+
+// opencodeGoWireFixes corrects models.dev's routing for the Go endpoint, which
+// reports these as Anthropic-SDK models but does not accept Anthropic-style
+// auth for MiniMax, and serves the Qwen models over chat-completions.
+var opencodeGoWireFixes = map[string]bool{
+	"minimax-m2.7": true, "qwen3.5-plus": true, "qwen3.6-plus": true,
+}
+
+func tweakOpencode(providerID, basePath string) func(string, modelsDevModel, *ai.Model) {
+	return func(id string, m modelsDevModel, out *ai.Model) {
+		if providerID == "opencode-go" && opencodeGoWireFixes[id] {
+			out.Api = ai.ApiOpenAICompletions
+			out.BaseURL = basePath + "/v1"
+			if id != "minimax-m2.7" {
+				// Qwen through DashScope takes its toggle at the top level.
+				mergeCompat(out, &ai.CompatFlags{ThinkingFormat: strptr("qwen")})
+			}
+		}
+
+		if m.Provider.NPM == "@ai-sdk/openai" {
+			mergeCompat(out, &ai.CompatFlags{SessionAffinityFormat: strptr("openai-nosession")})
+		}
+		if m.Provider.NPM == "@ai-sdk/alibaba" {
+			mergeCompat(out, &ai.CompatFlags{CacheControlFormat: strptr("anthropic")})
+		}
+
+		if providerID == "opencode" && id == "grok-build-0.1" {
+			mergeCompat(out, &ai.CompatFlags{SupportsReasoningEffort: boolptr(false)})
+		}
+		if id == "kimi-k2.6" {
+			// Takes Anthropic-style thinking objects and rejects both a string
+			// thinking value and a combined reasoning_effort.
+			mergeCompat(out, &ai.CompatFlags{
+				ThinkingFormat:          strptr("deepseek"),
+				SupportsReasoningEffort: boolptr(false),
+			})
+		}
+
+		if w, ok := opencodeContextWindows[id]; ok {
+			out.ContextWindow = w
+			if id == "gpt-5.4" {
+				out.MaxTokens = 128000
+			}
+		}
+
+		if out.Api == ai.ApiOpenAICompletions {
+			mergeCompat(out, &ai.CompatFlags{MaxTokensField: strptr("max_tokens")})
+			if opencodeLongCacheUnsupported[providerID+":"+id] {
+				mergeCompat(out, &ai.CompatFlags{SupportsLongCacheRetention: boolptr(false)})
+			}
+		}
+	}
+}
+
+// opencodeGoGLM52ThinkingLevels: the Go endpoint exposes only the top two.
+var opencodeGoGLM52ThinkingLevels = ai.ThinkingLevelMap{
+	ai.ThinkingOff: nil, "minimal": nil, "low": nil, "medium": nil,
+	"high": strptr("high"), "max": strptr("max"),
+}
+
+// skipOpencodeModel drops what upstream retired, plus one entry the zen
+// endpoints advertise but do not serve.
+func skipOpencodeModel(id string, m modelsDevModel) bool {
+	return m.Status == "deprecated" || id == "gpt-5.3-codex-spark"
+}
+
+// opencodeContextWindows are the limits the zen endpoints actually enforce.
+// Upstream metadata reports the model's own ceiling, which the router does not
+// grant — a request sized to it is rejected.
+var opencodeContextWindows = map[string]int{
+	"claude-sonnet-4-5": 200000,
+	"claude-sonnet-4":   200000,
+	"claude-opus-4-6":   1000000,
+	"claude-sonnet-4-6": 1000000,
+	"claude-opus-4.6":   1000000,
+	"claude-sonnet-4.6": 1000000,
+	"gpt-5.4":           272000,
+}
+
+const copilotBaseURL = "https://api.individual.githubcopilot.com"
+
+// copilotClaude matches the Claude 4.x and 5.x releases, which Copilot routes
+// to Anthropic's messages wire rather than its own chat endpoint.
+var copilotClaude = regexp.MustCompile(`^claude-(haiku|sonnet|opus)-[45]([.\-]|$)`)
+
+// copilotWire picks a wire per model: Claude goes to Anthropic's, the GPT-5
+// family and the two research lines are only served through /responses, and
+// everything else is chat-completions.
+func copilotWire(id string, _ modelsDevModel) (ai.Api, string) {
+	switch {
+	case copilotClaude.MatchString(id):
+		return ai.ApiAnthropicMessages, copilotBaseURL
+	case strings.HasPrefix(id, "gpt-5"), strings.HasPrefix(id, "oswe"), strings.HasPrefix(id, "mai-"):
+		return ai.ApiOpenAIResponses, copilotBaseURL
+	default:
+		return ai.ApiOpenAICompletions, copilotBaseURL
+	}
+}
+
+// copilotHeaders identify tau as a Copilot client. The endpoint rejects a
+// request that does not present a recognised editor and integration.
+var copilotHeaders = map[string]string{
+	"User-Agent":             "GitHubCopilotChat/0.35.0",
+	"Editor-Version":         "vscode/1.107.0",
+	"Editor-Plugin-Version":  "copilot-chat/0.35.0",
+	"Copilot-Integration-Id": "vscode-chat",
+}
+
+// copilotEagerToolInputUnsupported are the Copilot-hosted Anthropic models that
+// reject eager tool-input streaming, keyed "provider:model".
+var copilotEagerToolInputUnsupported = map[string]bool{
+	"github-copilot:claude-haiku-4.5":  true,
+	"github-copilot:claude-sonnet-4":   true,
+	"github-copilot:claude-sonnet-4.5": true,
+}
+
+// copilotExtendedContext are the models GitHub documents as supporting the
+// extended million-token window, which its own metadata does not report.
+var copilotExtendedContext = map[string]bool{
+	"claude-fable-5": true, "claude-opus-4.6": true, "claude-opus-4.7": true,
+	"claude-opus-4.8": true, "claude-opus-5": true, "claude-sonnet-4.6": true,
+	"claude-sonnet-5": true, "gpt-5.3-codex": true, "gpt-5.4": true, "gpt-5.5": true,
+}
+
+// copilotThinkingOverrides were checked against the authenticated /models
+// endpoint. They narrow what upstream metadata claims rather than replacing it.
+var copilotThinkingOverrides = map[string]ai.ThinkingLevelMap{
+	"claude-opus-4.7":   {"minimal": strptr("low")},
+	"claude-opus-4.8":   {"minimal": strptr("low")},
+	"claude-opus-5":     {"minimal": strptr("low")},
+	"claude-sonnet-4.6": {"minimal": strptr("low"), "max": strptr("max")},
+}
+
+func tweakCopilot(id string, _ modelsDevModel, out *ai.Model) {
+	out.Headers = copilotHeaders
+
+	switch out.Api {
+	case ai.ApiAnthropicMessages:
+		if copilotEagerToolInputUnsupported["github-copilot:"+id] {
+			mergeCompat(out, &ai.CompatFlags{SupportsEagerToolInputStreaming: boolptr(false)})
+		}
+	case ai.ApiOpenAICompletions:
+		mergeCompat(out, &ai.CompatFlags{
+			SupportsStore:           boolptr(false),
+			SupportsDeveloperRole:   boolptr(false),
+			SupportsReasoningEffort: boolptr(false),
+		})
+	}
+
+	if copilotExtendedContext[id] {
+		out.ContextWindow = 1000000
+	}
+}
+
+const (
+	cloudflareGatewayCompatURL = "https://gateway.ai.cloudflare.com/v1/" +
+		"{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat"
+	cloudflareGatewayOpenAIURL = "https://gateway.ai.cloudflare.com/v1/" +
+		"{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/openai"
+	cloudflareGatewayAnthropicURL = "https://gateway.ai.cloudflare.com/v1/" +
+		"{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic"
+)
+
+// gatewayUpstream splits "upstream/native-id", which is how the gateway's
+// catalog names a model.
+func gatewayUpstream(prefixedID string) (upstream, native string, ok bool) {
+	i := strings.Index(prefixedID, "/")
+	if i < 0 {
+		return "", "", false
+	}
+	return prefixedID[:i], prefixedID[i+1:], true
+}
+
+// skipUnroutableGatewayModel drops anything the gateway fronts through an
+// upstream tau has no route for. Listing it would offer a model no request can
+// reach.
+func skipUnroutableGatewayModel(id string, _ modelsDevModel) bool {
+	upstream, _, ok := gatewayUpstream(id)
+	if !ok {
+		return true
+	}
+	switch upstream {
+	case "openai", "anthropic", "workers-ai":
+		return false
+	}
+	return true
+}
+
+// renameGatewayModel strips the upstream prefix for the passthrough endpoints,
+// which expect the upstream's own id. The unified /compat endpoint is the
+// exception: it keys on the prefixed form.
+func renameGatewayModel(id string) (string, string) {
+	upstream, native, ok := gatewayUpstream(id)
+	if !ok || upstream == "workers-ai" {
+		return id, ""
+	}
+	return native, ""
+}
+
+func gatewayWire(id string, _ modelsDevModel) (ai.Api, string) {
+	upstream, _, ok := gatewayUpstream(id)
+	if !ok {
+		return "", ""
+	}
+	switch upstream {
+	case "openai":
+		// The unified endpoint does not carry /v1/responses yet.
+		return ai.ApiOpenAIResponses, cloudflareGatewayOpenAIURL
+	case "anthropic":
+		return ai.ApiAnthropicMessages, cloudflareGatewayAnthropicURL
+	default:
+		return ai.ApiOpenAICompletions, cloudflareGatewayCompatURL
+	}
+}
+
+func tweakCloudflareGateway(id string, _ modelsDevModel, out *ai.Model) {
+	upstream, _, ok := gatewayUpstream(id)
+	if !ok {
+		return
+	}
+	// A passthrough forwards the affinity header to an upstream that keys its
+	// cache off it; the OpenAI route does not use one.
+	if upstream == "anthropic" || upstream == "workers-ai" {
+		mergeCompat(out, &ai.CompatFlags{SendSessionAffinityHeaders: boolptr(true)})
+	}
+}
+
+// skipNonGeminiVertex keeps only the models served over the Gemini streaming
+// path. Vertex also fronts Claude and others, which speak their own wires.
+func skipNonGeminiVertex(id string, _ modelsDevModel) bool {
+	return !strings.HasPrefix(id, "gemini-") || id == "gemini-3.1-flash-lite-preview"
+}
+
+func tweakVertex(id string, _ modelsDevModel, out *ai.Model) {
+	// Vertex bills only the cached-content tokens as a cache read, so a
+	// cache-write rate here would charge for something tau never requests.
+	out.Cost.CacheWrite = 0
+	// models.dev's Vertex cache rate for this model disagrees with Google's
+	// own published table.
+	if id == "gemini-2.5-flash" {
+		out.Cost.CacheRead = 0.03
+	}
+}
+
+const (
+	bedrockUSBaseURL = "https://bedrock-runtime.us-east-1.amazonaws.com"
+	bedrockEUBaseURL = "https://bedrock-runtime.eu-central-1.amazonaws.com"
+)
+
+// bedrockBaseURL picks the region from the model id's own prefix.
+func bedrockBaseURL(id string) string {
+	if strings.HasPrefix(id, "eu.") {
+		return bedrockEUBaseURL
+	}
+	return bedrockUSBaseURL
+}
+
+// skipUnusableBedrockModel drops what Bedrock cannot serve the way tau calls
+// it: models reachable only through an inference profile, Jamba (no tools in
+// streaming mode), and the small Mistral (no system message).
+func skipUnusableBedrockModel(id string, _ modelsDevModel) bool {
+	return id == "anthropic.claude-opus-5" ||
+		strings.HasPrefix(id, "ai21.jamba") ||
+		strings.HasPrefix(id, "mistral.mistral-7b-instruct-v0")
+}
+
+// strictToolsFromStructuredOutput marks strict-mode support from models.dev's
+// structured_output flag, which Bedrock gates the same way.
+func strictToolsFromStructuredOutput(_ string, m modelsDevModel, out *ai.Model) {
+	if m.StructuredOutput {
+		mergeCompat(out, &ai.CompatFlags{SupportsStrictMode: boolptr(true)})
+	}
+}
+
+const codexBaseURL = "https://chatgpt.com/backend-api"
+
+// Codex serves a fixed short list under ChatGPT OAuth rather than an API key,
+// so it is written out rather than derived — models.dev describes the API
+// catalog, which carries aliases Codex does not accept.
+func codexModel(id, name string, in, out, cacheRead, cacheWrite float64, contextWindow int, longContext, vision bool) ai.Model {
+	input := []string{"text"}
+	if vision {
+		input = append(input, "image")
+	}
+	cost := ai.ModelCost{ModelCostRates: ai.ModelCostRates{
+		Input: in, Output: out, CacheRead: cacheRead, CacheWrite: cacheWrite,
+	}}
+	if longContext {
+		cost = withLongContextPricing(cost)
+	}
+	return ai.Model{
+		ID: id, Name: name,
+		Api: ai.ApiOpenAICodexResponses, Provider: "openai-codex", BaseURL: codexBaseURL,
+		Reasoning: true, Input: input, Cost: cost,
+		ContextWindow: contextWindow, MaxTokens: 128000,
+	}
+}
+
+// codexContext is the catalog limit Codex enforces; Spark is held lower.
+const (
+	codexContext      = 272000
+	codexSparkContext = 128000
+)
+
+var codexModels = []ai.Model{
+	codexModel("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark", 1.75, 14, 0.175, 0, codexSparkContext, false, false),
+	codexModel("gpt-5.4", "GPT-5.4", 2.5, 15, 0.25, 0, codexContext, true, true),
+	codexModel("gpt-5.4-mini", "GPT-5.4 mini", 0.75, 4.5, 0.075, 0, codexContext, false, true),
+	codexModel("gpt-5.5", "GPT-5.5", 5, 30, 0.5, 0, codexContext, true, true),
+	codexModel("gpt-5.6-luna", "GPT-5.6 Luna", 1, 6, 0.1, 1.25, codexContext, true, true),
+	codexModel("gpt-5.6-sol", "GPT-5.6 Sol", 5, 30, 0.5, 6.25, codexContext, true, true),
+	codexModel("gpt-5.6-terra", "GPT-5.6 Terra", 2.5, 15, 0.25, 3.125, codexContext, true, true),
+}
+
+// azureContextWindows: Azure Foundry deploys these with larger windows than
+// OpenAI's own short-tier defaults.
+var azureContextWindows = map[string]int{
+	"gpt-5.4": 1050000, "gpt-5.5": 1050000,
+	"gpt-5.6-luna": 1050000, "gpt-5.6-sol": 1050000, "gpt-5.6-terra": 1050000,
+}
+
+// cloneForAzure derives the Azure catalog from OpenAI's.
+//
+// Azure resells the same models over the same wire, so the alternative is a
+// second hand-maintained copy that drifts. Two things do not carry over: the
+// base URL, because a Foundry deployment's endpoint is per-resource and can
+// only come from configuration; and the context tiers, because Azure prices
+// the larger window as a deployment choice rather than a per-request tier.
+func cloneForAzure(openai []ai.Model) []ai.Model {
+	var out []ai.Model
+	for _, m := range openai {
+		if m.Api != ai.ApiOpenAIResponses {
+			continue
+		}
+		clone := m
+		clone.Api = ai.ApiAzureOpenAIResponses
+		clone.Provider = "azure-openai-responses"
+		clone.BaseURL = ""
+		clone.Cost = ai.ModelCost{ModelCostRates: m.Cost.ModelCostRates}
+		if w, ok := azureContextWindows[m.ID]; ok {
+			clone.ContextWindow = w
+		}
+		if m.Compat != nil {
+			compat := *m.Compat
+			clone.Compat = &compat
+		}
+		out = append(out, clone)
+	}
+	return out
 }

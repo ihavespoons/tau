@@ -177,6 +177,60 @@ func specs() []providerSpec {
 			Api: ai.ApiOpenAICompletions, BaseURL: "https://api.ant-ling.com/v1",
 			Extra: antLingModels,
 		},
+		{
+			Source: "opencode", ID: "opencode", Name: "OpenCode Zen",
+			BaseURL:      "https://opencode.ai/zen/v1",
+			Skip:         skipOpencodeModel,
+			PerModelWire: opencodeWire("https://opencode.ai/zen"),
+			Tweak:        tweakOpencode("opencode", "https://opencode.ai/zen"),
+		},
+		{
+			Source: "opencode-go", ID: "opencode-go", Name: "OpenCode Zen Go",
+			BaseURL:      "https://opencode.ai/zen/go/v1",
+			Skip:         skipOpencodeModel,
+			PerModelWire: opencodeWire("https://opencode.ai/zen/go"),
+			Tweak:        tweakOpencode("opencode-go", "https://opencode.ai/zen/go"),
+		},
+		{
+			Source: "github-copilot", ID: "github-copilot", Name: "GitHub Copilot",
+			BaseURL: copilotBaseURL,
+			// Copilot bills the extended window at a second rate, and is one of
+			// the few providers whose published tiers match what it charges.
+			CostTiers:     true,
+			Skip:          func(_ string, m modelsDevModel) bool { return m.Status == "deprecated" },
+			PerModelWire:  copilotWire,
+			Tweak:         tweakCopilot,
+			DefaultLimits: modelLimits{ContextWindow: 128000, MaxTokens: 8192},
+		},
+		{
+			Source: "cloudflare-ai-gateway", ID: "cloudflare-ai-gateway", Name: "Cloudflare AI Gateway",
+			BaseURL:      cloudflareGatewayCompatURL,
+			Skip:         skipUnroutableGatewayModel,
+			Rename:       renameGatewayModel,
+			PerModelWire: gatewayWire,
+			Tweak:        tweakCloudflareGateway,
+		},
+		{
+			Source: "google-vertex", ID: "google-vertex", Name: "Google Vertex AI",
+			Api: ai.ApiGoogleVertex, BaseURL: "https://{location}-aiplatform.googleapis.com",
+			// The Vertex catalog also carries Claude, OpenAI, and other managed
+			// models that do not use the Gemini streaming path.
+			Skip:  skipNonGeminiVertex,
+			Tweak: tweakVertex,
+		},
+		{
+			Source: "amazon-bedrock", ID: "amazon-bedrock", Name: "Amazon Bedrock",
+			Api:             ai.ApiBedrockConverse,
+			BaseURL:         bedrockUSBaseURL,
+			Skip:            skipUnusableBedrockModel,
+			PerModelBaseURL: bedrockBaseURL,
+			Tweak:           strictToolsFromStructuredOutput,
+		},
+		{
+			ID: "openai-codex", Name: "OpenAI Codex",
+			Api: ai.ApiOpenAICodexResponses, BaseURL: codexBaseURL,
+			Extra: codexModels,
+		},
 	}
 }
 

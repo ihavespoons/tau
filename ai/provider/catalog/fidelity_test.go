@@ -43,16 +43,7 @@ var usedDivergences = map[string]bool{}
 // notYetGenerated lists providers whose catalogs tau does not build yet. They
 // are named rather than skipped silently, so the remaining work is visible in
 // the test output instead of being invisible in its absence.
-var notYetGenerated = map[string]string{
-	"amazon-bedrock":         "needs per-region inference-profile ids",
-	"azure-openai-responses": "needs the azure-openai-responses wire",
-	"cloudflare-ai-gateway":  "multi-api provider: routes to three wires by model",
-	"github-copilot":         "needs the authenticated copilot catalog",
-	"google-vertex":          "needs the google-vertex wire",
-	"openai-codex":           "hand-written model list, not derived from models.dev",
-	"opencode":               "needs the opencode zen catalog",
-	"opencode-go":            "needs the opencode zen catalog",
-}
+var notYetGenerated = map[string]string{}
 
 // loadGolden reads Pi's catalog for one provider.
 func loadGolden(t *testing.T, providerID string) map[string]ai.Model {

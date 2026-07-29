@@ -26,11 +26,32 @@ import (
 // would quietly give every Claude model a full six-level map it does not have.
 func applyMetadata(m *ai.Model, idx *reasoningIndex) {
 	applyCompletionsCompat(m)
+	// Before the reasoning pass, because it can set a thinking format that
+	// decides whether that pass applies at all.
+	if m.Api == ai.ApiOpenAICompletions && strings.Contains(m.ID, "deepseek-v4") {
+		applyDeepSeekV4Compat(m)
+	}
 	applyReasoningMetadata(m, idx)
 	applyThinkingLevels(m)
 	applyStrictToolCompat(m)
 	applyGrammarToolCompat(m)
+	applyToolSearch(m)
 	applyExplicitPromptCache(m)
+}
+
+// applyToolSearch marks the models that accept OpenAI's tool-search parameter.
+//
+// It is a pass rather than a build-time correction because the Azure catalog
+// is cloned from OpenAI's before these run, and Azure does not offer the
+// parameter — baking it in earlier would hand every Azure model a flag its
+// endpoint rejects.
+func applyToolSearch(m *ai.Model) {
+	onOpenAI := m.Provider == "openai" && m.Api == ai.ApiOpenAIResponses
+	onCodex := m.Provider == "openai-codex" && m.Api == ai.ApiOpenAICodexResponses
+	if (!onOpenAI && !onCodex) || !openAIToolSearch[m.ID] {
+		return
+	}
+	mergeCompat(m, &ai.CompatFlags{SupportsToolSearch: boolptr(true)})
 }
 
 // applyCompletionsCompat bakes chat-completions detection into the catalog, so
@@ -225,7 +246,6 @@ func applyThinkingLevels(m *ai.Model) {
 
 	if m.Api == ai.ApiOpenAICompletions && strings.Contains(m.ID, "deepseek-v4") {
 		mergeThinkingLevelMap(m, deepseekV4ThinkingLevels(m.Provider))
-		applyDeepSeekV4Compat(m)
 	}
 	if m.Provider == openRouterProviderID && strings.HasPrefix(m.ID, "inception/mercury-2") {
 		// Mercury 2's instant mode — reasoning effort "none" — turns off tool
@@ -235,6 +255,30 @@ func applyThinkingLevels(m *ai.Model) {
 	}
 	if m.Provider == openRouterProviderID && m.ID == "z-ai/glm-5.2" {
 		mergeThinkingLevelMap(m, ai.ThinkingLevelMap{"xhigh": strptr("xhigh")})
+	}
+	if m.Provider == "openai-codex" && supportsOpenAIXhigh(m.ID) {
+		// Codex exposes its lowest setting as the model's "low"; there is no
+		// separate minimal tier behind the ChatGPT backend.
+		mergeThinkingLevelMap(m, ai.ThinkingLevelMap{"minimal": strptr("low")})
+	}
+	if m.Provider == "github-copilot" && strings.HasPrefix(m.ID, "gpt-5") {
+		mergeThinkingLevelMap(m, ai.ThinkingLevelMap{"minimal": strptr("low")})
+	}
+	if m.Provider == "github-copilot" {
+		mergeThinkingLevelMap(m, copilotThinkingOverrides[m.ID])
+	}
+	if m.Provider == "opencode-go" && m.ID == "glm-5.2" {
+		mergeThinkingLevelMap(m, opencodeGoGLM52ThinkingLevels)
+	}
+	if m.Provider == "opencode-go" && m.ID == "kimi-k2.6" {
+		// The Go endpoint exposes K2.6 thinking as on or off, not as tiers.
+		mergeThinkingLevelMap(m, ai.ThinkingLevelMap{"minimal": nil, "low": nil, "medium": nil})
+	}
+	if m.Provider == "opencode" && m.ID == "grok-build-0.1" {
+		// Reasons by default and rejects an explicit effort.
+		mergeThinkingLevelMap(m, ai.ThinkingLevelMap{
+			ai.ThinkingOff: nil, "minimal": nil, "low": nil, "medium": nil,
+		})
 	}
 	if m.Provider == "ant-ling" && m.Reasoning {
 		mergeThinkingLevelMap(m, antLingRingThinkingLevels)

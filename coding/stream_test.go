@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ihavespoons/tau/ai"
+	"github.com/ihavespoons/tau/ai/auth"
 	"github.com/ihavespoons/tau/config"
 )
 
@@ -122,5 +123,53 @@ func TestNoSessionMeansNoAffinity(t *testing.T) {
 
 	if *header != "" {
 		t.Errorf("session header %q, want none", *header)
+	}
+}
+
+// THE POINT: a bare model id is ambiguous once the compiled catalog spans
+// every provider — a dozen of them resell claude-sonnet-5 — and the resolver
+// breaks ties by sorting ids, so an unqualified default would silently start
+// every session on whichever reseller sorted highest. It did: the default
+// resolved to a Bedrock model the moment the full catalog landed.
+func TestDefaultModelResolvesToAnthropic(t *testing.T) {
+	agentDir := t.TempDir()
+	t.Setenv(config.EnvAgentDir, agentDir)
+
+	reg, warnings, err := BuildRegistry(auth.NewMemStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) > 0 {
+		t.Fatalf("unexpected warnings with no models.json: %v", warnings)
+	}
+
+	match, err := reg.Resolve(DefaultModel)
+	if err != nil {
+		t.Fatalf("the default model must resolve: %v", err)
+	}
+	if match.Model.Provider != "anthropic" {
+		t.Errorf("default resolved to %s/%s", match.Model.Provider, match.Model.ID)
+	}
+	if match.Model.Api != ai.ApiAnthropicMessages {
+		t.Errorf("default model wire: %q", match.Model.Api)
+	}
+}
+
+// The default has to be reachable through the provider that serves it, or the
+// first turn fails on a nil stream.
+func TestDefaultModelIsStreamable(t *testing.T) {
+	agentDir := t.TempDir()
+	t.Setenv(config.EnvAgentDir, agentDir)
+
+	reg, _, err := BuildRegistry(auth.NewMemStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	match, err := reg.Resolve(DefaultModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := reg.ProviderFor(match.Model); p == nil || p.StreamSimple == nil {
+		t.Fatal("the default model has no provider that can stream it")
 	}
 }
