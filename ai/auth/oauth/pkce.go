@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 )
 
 // PKCE is a code verifier and its S256 challenge.
@@ -30,4 +31,19 @@ func GeneratePKCE() (PKCE, error) {
 func Challenge(verifier string) string {
 	sum := sha256.Sum256([]byte(verifier))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+// randomState returns a fresh CSRF state value: 16 random bytes as hex,
+// matching Pi's createState.
+//
+// The state is what ties a redirect back to the login attempt that started it.
+// A flow that reuses the verifier for both — as Anthropic's does — is fine
+// because the verifier is already unguessable, but a separate value is clearer
+// where the provider round-trips it visibly.
+func randomState() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
 }

@@ -74,6 +74,8 @@ func Keyed(store auth.CredentialStore, env auth.EnvContext, o KeyedOptions) *Pro
 			return googlegenai.StreamSimpleVertex(ctx, model, c, opts)
 		case ai.ApiMistralConversations:
 			return mistralconv.StreamSimple(ctx, model, c, opts)
+		case ai.ApiOpenAICodexResponses:
+			return openairesp.StreamSimpleCodex(ctx, model, c, opts)
 		default:
 			return errStream(model, unsupportedWire(model))
 		}
@@ -103,6 +105,9 @@ func Keyed(store auth.CredentialStore, env auth.EnvContext, o KeyedOptions) *Pro
 				&googlegenai.VertexOptions{Options: googlegenai.Options{StreamOptions: *opts}})
 		case ai.ApiMistralConversations:
 			return mistralconv.Stream(ctx, model, c, &mistralconv.Options{StreamOptions: *opts})
+		case ai.ApiOpenAICodexResponses:
+			return openairesp.StreamCodex(ctx, model, c,
+				&openairesp.CodexOptions{Options: openairesp.Options{StreamOptions: *opts}})
 		default:
 			return errStream(model, unsupportedWire(model))
 		}
@@ -139,7 +144,8 @@ func StreamableWire(api ai.Api) bool {
 	switch api {
 	case ai.ApiOpenAICompletions, ai.ApiAnthropicMessages,
 		ai.ApiOpenAIResponses, ai.ApiAzureOpenAIResponses,
-		ai.ApiGoogleGenerativeAI, ai.ApiGoogleVertex, ai.ApiMistralConversations:
+		ai.ApiGoogleGenerativeAI, ai.ApiGoogleVertex, ai.ApiMistralConversations,
+		ai.ApiOpenAICodexResponses:
 		return true
 	}
 	return false

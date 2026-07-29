@@ -7,12 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ihavespoons/tau/ai/auth"
@@ -136,7 +134,10 @@ func (a *Anthropic) Login(ctx context.Context, in auth.Interaction) (*auth.Crede
 
 	var srv *callbackServer
 	if !a.DisableCallbackServer {
-		srv, err = startCallbackServer(state)
+		srv, err = startCallbackServer(callbackConfig{
+			Port: anthropicCallbackPort, Path: anthropicCallbackPath,
+			Provider: "Anthropic", ExpectedState: state,
+		})
 		if err != nil {
 			// A busy port must not block login: fall back to manual paste.
 			srv = nil
@@ -340,76 +341,6 @@ func parseAuthorizationInput(input string) authorizationInput {
 }
 
 // callbackResult is what the local listener captured.
-type callbackResult struct {
-	Code  string
-	State string
-}
-
-type callbackServer struct {
-	srv      *http.Server
-	ln       net.Listener
-	ch       chan callbackResult
-	once     sync.Once
-	closeOne sync.Once
-}
-
-func startCallbackServer(expectedState string) (*callbackServer, error) {
-	addr := net.JoinHostPort(callbackHost(), fmt.Sprintf("%d", anthropicCallbackPort))
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-	cs := &callbackServer{ln: ln, ch: make(chan callbackResult, 1)}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != anthropicCallbackPath {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = io.WriteString(w, ErrorHTML("Callback route not found.", ""))
-			return
-		}
-		q := r.URL.Query()
-		code, state, errParam := q.Get("code"), q.Get("state"), q.Get("error")
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		switch {
-		case errParam != "":
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = io.WriteString(w, ErrorHTML("Anthropic authentication did not complete.", "Error: "+errParam))
-		case code == "" || state == "":
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = io.WriteString(w, ErrorHTML("Missing code or state parameter.", ""))
-		case state != expectedState:
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = io.WriteString(w, ErrorHTML("State mismatch.", ""))
-		default:
-			w.WriteHeader(http.StatusOK)
-			_, _ = io.WriteString(w, SuccessHTML("Anthropic authentication completed. You can close this window."))
-			cs.settle(callbackResult{Code: code, State: state})
-		}
-	})
-	cs.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	go func() { _ = cs.srv.Serve(ln) }()
-	return cs, nil
-}
-
-func (c *callbackServer) settle(res callbackResult) {
-	c.once.Do(func() { c.ch <- res })
-}
-
-// Wait returns a channel that yields the captured code, or a zero value if the
-// wait is cancelled.
-func (c *callbackServer) Wait() <-chan callbackResult { return c.ch }
-
-// CancelWait unblocks Wait with an empty result.
-func (c *callbackServer) CancelWait() { c.settle(callbackResult{}) }
-
-func (c *callbackServer) Close() {
-	c.closeOne.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = c.srv.Shutdown(ctx)
-	})
-}
 
 // Access returns a valid access token for the provider, refreshing inside the
 // store's Modify lock when it is within the validity window. Concurrent calls

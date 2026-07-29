@@ -334,7 +334,10 @@ func consume(ctx context.Context, body io.Reader, stream *ai.MessageStream, out 
 			}
 			closeItem(st, stream, e.OutputIndex, it, e.Item)
 
-		case "response.completed", "response.incomplete":
+		// response.done is the ChatGPT backend's spelling of response.completed.
+		// Without it that stream ends with no terminal event and the turn is
+		// reported as truncated — a failure that reads like a network problem.
+		case "response.completed", "response.incomplete", "response.done":
 			sawTerminal = true
 			finalize(st, e.Response, model, opts)
 

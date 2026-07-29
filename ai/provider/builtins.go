@@ -101,8 +101,11 @@ func builtin(id string, store auth.CredentialStore, env auth.EnvContext) *Provid
 // A provider without one is not broken: an API key still works. The flow is
 // what makes a subscription usable, which for Copilot is the only way in.
 func builtinOAuth(id string) auth.OAuthAuth {
-	if id == "github-copilot" {
+	switch id {
+	case "github-copilot":
 		return oauth.NewCopilot()
+	case "openai-codex":
+		return oauth.NewCodex()
 	}
 	return nil
 }

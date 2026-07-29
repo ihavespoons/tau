@@ -411,7 +411,10 @@ func TestLoginCallbackServerWins(t *testing.T) {
 }
 
 func TestCallbackServerRejectsBadState(t *testing.T) {
-	cs, err := startCallbackServer("expected-state")
+	cs, err := startCallbackServer(callbackConfig{
+		Port: anthropicCallbackPort, Path: anthropicCallbackPath,
+		Provider: "Anthropic", ExpectedState: "expected-state",
+	})
 	if err != nil {
 		t.Skipf("callback port unavailable: %v", err)
 	}
