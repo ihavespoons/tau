@@ -24,7 +24,15 @@ func CodingTools(e env.Env) []agent.Tool {
 		// the model to inspect variables that do not exist just buys a wasted
 		// tool call — so the guideline stays out until the feature is real.
 		promptMeta(Bash(e),
-			"Execute bash commands (ls, grep, find, etc.)"),
+			"Execute bash commands"),
+		promptMeta(Grep(e),
+			"Search file contents for patterns (respects .gitignore)",
+			"Use grep to search file contents instead of shelling out to grep or rg."),
+		promptMeta(Find(e),
+			"Find files by glob pattern (respects .gitignore)",
+			"Use find to locate files instead of shelling out to find or ls -R."),
+		promptMeta(Ls(e),
+			"List directory contents"),
 		promptMeta(Edits(e),
 			"Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
 			"Use edit for precise changes (edits[].oldText must match exactly)",
