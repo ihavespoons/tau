@@ -33,6 +33,12 @@ var builtinNames = map[string]string{
 	"fireworks":             "Fireworks",
 	"zai":                   "Z.ai",
 	"zai-coding-cn":         "Z.ai (CN)",
+	"minimax":               "MiniMax",
+	"minimax-cn":            "MiniMax (CN)",
+	"kimi-coding":           "Kimi For Coding",
+	"nvidia":                "NVIDIA NIM",
+	"deepseek":              "DeepSeek",
+	"ant-ling":              "Ant Ling",
 }
 
 // Builtins returns every provider tau ships with, in id order.

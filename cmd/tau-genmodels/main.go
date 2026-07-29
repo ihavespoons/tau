@@ -51,6 +51,11 @@ func run(dataDir, outDir string, refresh, report bool) error {
 		return err
 	}
 
+	// NIM's deployed ids are needed before any provider is built.
+	if err := loadNvidiaLiveIDs(dataDir); err != nil {
+		return err
+	}
+
 	catalogs, err := buildAll(cat, dataDir)
 	if err != nil {
 		return err

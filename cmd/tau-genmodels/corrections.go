@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -396,4 +397,245 @@ func tweakFireworks(id string, _ modelsDevModel, out *ai.Model) {
 		SupportsCacheControlOnTools:     boolptr(false),
 		SupportsLongCacheRetention:      boolptr(false),
 	})
+}
+
+// minimaxDirect are the only MiniMax models the direct endpoints serve.
+// models.dev lists the whole family, but the rest are reachable only through
+// aggregators, so offering them here would produce a 404 on first use.
+var minimaxDirect = map[string]bool{
+	"MiniMax-M2.7": true, "MiniMax-M2.7-highspeed": true, "MiniMax-M3": true,
+}
+
+func skipUndirectMinimax(id string, _ modelsDevModel) bool { return !minimaxDirect[id] }
+
+// kimiAliases are versioned names models.dev exposes for the one model the
+// Kimi coding plan actually serves.
+var kimiAliases = map[string]bool{"k2p5": true, "k2p6": true, "k2p7": true}
+
+const kimiCanonical = "kimi-for-coding"
+
+// renameKimiAlias folds a versioned alias onto the canonical id.
+func renameKimiAlias(id string) (string, string) {
+	if kimiAliases[id] {
+		return kimiCanonical, "Kimi For Coding"
+	}
+	return id, ""
+}
+
+// kimiImpliedCosts: the coding plan is subscription-backed, so models.dev
+// reports zero. The equivalent Moonshot API rates are used instead, which
+// makes a session's cost line an estimate of what the usage is worth rather
+// than a flat and useless zero.
+var kimiImpliedCosts = map[string]ai.ModelCostRates{
+	"k3":                        {Input: 3, Output: 15, CacheRead: 0.3},
+	"kimi-for-coding":           {Input: 0.95, Output: 4, CacheRead: 0.19},
+	"kimi-for-coding-highspeed": {Input: 1.9, Output: 8, CacheRead: 0.38},
+	"kimi-k2-thinking":          {Input: 0.6, Output: 2.5, CacheRead: 0.15},
+}
+
+func tweakKimiCoding(id string, _ modelsDevModel, out *ai.Model) {
+	out.Headers = map[string]string{"User-Agent": "KimiCLI/1.5"}
+
+	flags := &ai.CompatFlags{ForceAdaptiveThinking: boolptr(true)}
+	if out.ID == "k3" || out.ID == kimiCanonical {
+		// These two return thinking blocks with no signature, which the
+		// Anthropic wire otherwise rejects on replay.
+		flags.AllowEmptySignature = boolptr(true)
+	}
+	mergeCompat(out, flags)
+
+	if out.ID == "k3" {
+		out.Reasoning = true
+	}
+	if implied, ok := kimiImpliedCosts[out.ID]; ok {
+		if out.Cost.Input == 0 {
+			out.Cost.Input = implied.Input
+		}
+		if out.Cost.Output == 0 {
+			out.Cost.Output = implied.Output
+		}
+		if out.Cost.CacheRead == 0 {
+			out.Cost.CacheRead = implied.CacheRead
+		}
+	}
+}
+
+const nvidiaBaseURL = "https://integrate.api.nvidia.com/v1"
+
+// nvidiaCompat: NIM is OpenAI-shaped but supports almost none of the optional
+// parameters.
+func nvidiaCompat(c *ai.CompatFlags) {
+	c.SupportsStore = boolptr(false)
+	c.SupportsDeveloperRole = boolptr(false)
+	c.SupportsReasoningEffort = boolptr(false)
+	c.MaxTokensField = strptr("max_tokens")
+	c.SupportsStrictMode = boolptr(false)
+	c.SupportsLongCacheRetention = boolptr(false)
+}
+
+// deepseekCompatFlags is the dialect DeepSeek's own endpoint speaks.
+func deepseekCompatFlags() *ai.CompatFlags {
+	return &ai.CompatFlags{
+		RequiresReasoningContentOnAssistantMessages: boolptr(true),
+		ThinkingFormat: strptr("deepseek"),
+	}
+}
+
+// deepseekModels are hand-written: models.dev does not list the V4 family for
+// the direct endpoint.
+var deepseekModels = []ai.Model{
+	{
+		ID: "deepseek-v4-flash", Name: "DeepSeek V4 Flash",
+		Api: ai.ApiOpenAICompletions, Provider: "deepseek", BaseURL: "https://api.deepseek.com",
+		Reasoning: true, Input: []string{"text"},
+		Cost: ai.ModelCost{ModelCostRates: ai.ModelCostRates{
+			Input: 0.14, Output: 0.28, CacheRead: 0.0028,
+		}},
+		ContextWindow: 1000000, MaxTokens: 384000,
+		Compat: deepseekCompatFlags(),
+	},
+	{
+		ID: "deepseek-v4-pro", Name: "DeepSeek V4 Pro",
+		Api: ai.ApiOpenAICompletions, Provider: "deepseek", BaseURL: "https://api.deepseek.com",
+		Reasoning: true, Input: []string{"text"},
+		Cost: ai.ModelCost{ModelCostRates: ai.ModelCostRates{
+			Input: 0.435, Output: 0.87, CacheRead: 0.003625,
+		}},
+		ContextWindow: 1000000, MaxTokens: 384000,
+		Compat: deepseekCompatFlags(),
+	},
+}
+
+// antLingCompatFlags is shared by the whole Ling family.
+func antLingCompatFlags() *ai.CompatFlags {
+	return &ai.CompatFlags{
+		SupportsStore:              boolptr(false),
+		SupportsDeveloperRole:      boolptr(false),
+		SupportsReasoningEffort:    boolptr(false),
+		MaxTokensField:             strptr("max_tokens"),
+		SupportsLongCacheRetention: boolptr(false),
+	}
+}
+
+func antLingModel(id, name string, in, out float64, reasoning bool) ai.Model {
+	m := ai.Model{
+		ID: id, Name: name,
+		Api: ai.ApiOpenAICompletions, Provider: "ant-ling", BaseURL: "https://api.ant-ling.com/v1",
+		Reasoning: reasoning, Input: []string{"text"},
+		Cost:          ai.ModelCost{ModelCostRates: ai.ModelCostRates{Input: in, Output: out}},
+		ContextWindow: 262144, MaxTokens: 65536,
+		Compat: antLingCompatFlags(),
+	}
+	if reasoning {
+		m.Compat.ThinkingFormat = strptr("ant-ling")
+	}
+	return m
+}
+
+// antLingModels are hand-written: models.dev does not list this provider.
+var antLingModels = []ai.Model{
+	antLingModel("Ling-2.6-flash", "Ling 2.6 Flash", 0.01, 0.02, false),
+	antLingModel("Ling-2.6-1T", "Ling 2.6 1T", 0.06, 0.25, false),
+	antLingModel("Ring-2.6-1T", "Ring 2.6 1T", 0.06, 0.25, true),
+}
+
+// antLingRingThinkingLevels: Ring reasons by default, and only the top two
+// settings have a documented explicit control.
+var antLingRingThinkingLevels = ai.ThinkingLevelMap{
+	ai.ThinkingOff: nil, "minimal": nil, "low": nil, "medium": nil,
+	"high": strptr("high"), "xhigh": strptr("xhigh"),
+}
+
+// nvidiaLiveIDs maps a models.dev id, and its normalised form, onto the id NIM
+// actually deploys. It is populated from the vendored /models snapshot.
+var nvidiaLiveIDs = map[string]string{}
+
+// normalizeNvidiaID is how NIM's own ids differ from models.dev's: case and
+// the separator inside a version.
+func normalizeNvidiaID(id string) string {
+	return strings.ReplaceAll(strings.ToLower(id), "_", ".")
+}
+
+// loadNvidiaLiveIDs reads the vendored NIM catalog.
+func loadNvidiaLiveIDs(dataDir string) error {
+	var cat struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := readJSON(filepath.Join(dataDir, "nvidia.json"), &cat); err != nil {
+		return err
+	}
+	for _, m := range cat.Data {
+		nvidiaLiveIDs[m.ID] = m.ID
+		nvidiaLiveIDs[normalizeNvidiaID(m.ID)] = m.ID
+	}
+	return nil
+}
+
+func nvidiaLiveID(id string) (string, bool) {
+	if live, ok := nvidiaLiveIDs[id]; ok {
+		return live, true
+	}
+	live, ok := nvidiaLiveIDs[normalizeNvidiaID(id)]
+	return live, ok
+}
+
+// nvidiaUnsupported are deployed but do not work through the OpenAI-compatible
+// endpoint — each was tried.
+var nvidiaUnsupported = map[string]bool{
+	"abacusai/dracarys-llama-3.1-70b-instruct": true,
+	"bytedance/seed-oss-36b-instruct":          true,
+	"deepseek-ai/deepseek-v4-flash":            true,
+	"deepseek-ai/deepseek-v4-pro":              true,
+	"google/gemma-2-2b-it":                     true,
+	"google/gemma-3n-e2b-it":                   true,
+	"google/gemma-3n-e4b-it":                   true,
+	"google/gemma-4-31b-it":                    true,
+	"meta/llama-3.2-1b-instruct":               true,
+	"meta/llama-4-maverick-17b-128e-instruct":  true,
+	"microsoft/phi-4-mini-instruct":            true,
+	"minimaxai/minimax-m2.7":                   true,
+	"mistralai/mistral-nemotron":               true,
+	"nvidia/nemotron-mini-4b-instruct":         true,
+	"qwen/qwen3-next-80b-a3b-instruct":         true,
+	"qwen/qwen3.5-397b-a17b":                   true,
+	"sarvamai/sarvam-m":                        true,
+	"upstage/solar-10.7b-instruct":             true,
+}
+
+// skipUndeployedNvidia drops anything NIM does not serve, does not serve as
+// text, or serves in a form the OpenAI-compatible endpoint cannot use.
+func skipUndeployedNvidia(id string, m modelsDevModel) bool {
+	if !hasModality(m.Modalities.Input, "text") || !hasModality(m.Modalities.Output, "text") {
+		return true
+	}
+	live, ok := nvidiaLiveID(id)
+	return !ok || nvidiaUnsupported[live]
+}
+
+func renameToNvidiaLiveID(id string) (string, string) {
+	if live, ok := nvidiaLiveID(id); ok {
+		return live, ""
+	}
+	return id, ""
+}
+
+func tweakNvidia(_ string, _ modelsDevModel, out *ai.Model) {
+	// NIM queues cold models; without a long poll the request returns before
+	// the model has loaded.
+	out.Headers = map[string]string{"NVCF-POLL-SECONDS": "3600"}
+	if out.Compat == nil {
+		out.Compat = &ai.CompatFlags{}
+	}
+	nvidiaCompat(out.Compat)
+}
+
+func hasModality(list []string, want string) bool {
+	for _, v := range list {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }

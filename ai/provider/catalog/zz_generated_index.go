@@ -9,16 +9,22 @@ import "github.com/ihavespoons/tau/ai"
 // It is the generator's index: every provider tau knows about without
 // configuration appears here, and nothing else does.
 var Catalogs = map[string][]ai.Model{
+	"ant-ling":              AntLingModels,
 	"anthropic":             AnthropicModels,
 	"cerebras":              CerebrasModels,
 	"cloudflare-workers-ai": CloudflareWorkersAIModels,
+	"deepseek":              DeepseekModels,
 	"fireworks":             FireworksModels,
 	"google":                GoogleModels,
 	"groq":                  GroqModels,
 	"huggingface":           HuggingfaceModels,
+	"kimi-coding":           KimiCodingModels,
+	"minimax":               MinimaxModels,
+	"minimax-cn":            MinimaxCNModels,
 	"mistral":               MistralModels,
 	"moonshotai":            MoonshotaiModels,
 	"moonshotai-cn":         MoonshotaiCNModels,
+	"nvidia":                NvidiaModels,
 	"openai":                OpenaiModels,
 	"openrouter":            OpenrouterModels,
 	"qwen-token-plan":       QwenTokenPlanModels,

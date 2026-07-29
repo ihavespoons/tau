@@ -140,6 +140,43 @@ func specs() []providerSpec {
 			Api: ai.ApiOpenAICompletions, BaseURL: "https://token-plan-sgp.xiaomimimo.com/v1",
 			Tweak: withCompat(xiaomiCompat),
 		},
+		{
+			Source: "minimax", ID: "minimax", Name: "MiniMax",
+			// MiniMax's Anthropic-compatible API; the wire appends /v1/messages.
+			Api: ai.ApiAnthropicMessages, BaseURL: "https://api.minimax.io/anthropic",
+			Skip: skipUndirectMinimax,
+		},
+		{
+			Source: "minimax-cn", ID: "minimax-cn", Name: "MiniMax (CN)",
+			Api: ai.ApiAnthropicMessages, BaseURL: "https://api.minimaxi.com/anthropic",
+			Skip: skipUndirectMinimax,
+		},
+		{
+			Source: "kimi-for-coding", ID: "kimi-coding", Name: "Kimi For Coding",
+			Api: ai.ApiAnthropicMessages, BaseURL: "https://api.kimi.com/coding",
+			Rename: renameKimiAlias,
+			Tweak:  tweakKimiCoding,
+		},
+		{
+			Source: "nvidia", ID: "nvidia", Name: "NVIDIA NIM",
+			Api: ai.ApiOpenAICompletions, BaseURL: nvidiaBaseURL,
+			// NIM only serves what is deployed, under whatever id it deployed
+			// it as, so models.dev ids are mapped onto the live ones and
+			// anything not deployed is dropped rather than offered.
+			Skip:   skipUndeployedNvidia,
+			Rename: renameToNvidiaLiveID,
+			Tweak:  tweakNvidia,
+		},
+		{
+			ID: "deepseek", Name: "DeepSeek",
+			Api: ai.ApiOpenAICompletions, BaseURL: "https://api.deepseek.com",
+			Extra: deepseekModels,
+		},
+		{
+			ID: "ant-ling", Name: "Ant Ling",
+			Api: ai.ApiOpenAICompletions, BaseURL: "https://api.ant-ling.com/v1",
+			Extra: antLingModels,
+		},
 	}
 }
 

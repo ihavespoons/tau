@@ -45,16 +45,10 @@ var usedDivergences = map[string]bool{}
 // the test output instead of being invisible in its absence.
 var notYetGenerated = map[string]string{
 	"amazon-bedrock":         "needs per-region inference-profile ids",
-	"ant-ling":               "hand-written model list, not derived from models.dev",
 	"azure-openai-responses": "needs the azure-openai-responses wire",
 	"cloudflare-ai-gateway":  "multi-api provider: routes to three wires by model",
-	"deepseek":               "hand-written model list, not derived from models.dev",
 	"github-copilot":         "needs the authenticated copilot catalog",
 	"google-vertex":          "needs the google-vertex wire",
-	"kimi-coding":            "hand-written model list, not derived from models.dev",
-	"minimax":                "hand-written model list, not derived from models.dev",
-	"minimax-cn":             "hand-written model list, not derived from models.dev",
-	"nvidia":                 "needs the live NIM id mapping",
 	"openai-codex":           "hand-written model list, not derived from models.dev",
 	"opencode":               "needs the opencode zen catalog",
 	"opencode-go":            "needs the opencode zen catalog",

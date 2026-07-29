@@ -36,6 +36,10 @@ type providerSpec struct {
 	Tweak func(id string, m modelsDevModel, out *ai.Model)
 	// PerModelBaseURL overrides BaseURL for models that need their own.
 	PerModelBaseURL func(id string) string
+	// Rename folds an upstream id onto a different one, returning the new id
+	// and optionally a new display name. Upstream sometimes publishes several
+	// versioned aliases for one served model.
+	Rename func(id string) (string, string)
 	// Extra are models the provider serves that models.dev does not describe.
 	// They still go through the correction passes.
 	Extra []ai.Model
@@ -55,10 +59,19 @@ func (s providerSpec) build(cat modelsDevCatalog, opts *reasoningIndex) []ai.Mod
 		src, ok = cat[alt]
 	}
 	if !ok {
+		// A provider may be entirely hand-written. Its Extra models are still
+		// the catalog, so an absent source is not an empty result.
+		if s.Source == "" {
+			return append([]ai.Model(nil), s.Extra...)
+		}
 		return nil
 	}
 
 	var out []ai.Model
+	// renamed records which ids arrived via an alias, so a collision with the
+	// canonical entry resolves in favour of the real one.
+	renamed := map[string]bool{}
+
 	for id, m := range src.Models {
 		if !m.ToolCall {
 			continue
@@ -74,9 +87,14 @@ func (s providerSpec) build(cat modelsDevCatalog, opts *reasoningIndex) []ai.Mod
 			}
 		}
 
+		modelID, renamedTo := id, ""
+		if s.Rename != nil {
+			modelID, renamedTo = s.Rename(id)
+		}
+
 		model := ai.Model{
-			ID:            id,
-			Name:          m.displayName(id),
+			ID:            modelID,
+			Name:          m.displayName(modelID),
 			Api:           s.Api,
 			Provider:      ai.ProviderId(s.ID),
 			BaseURL:       baseURL,
@@ -86,12 +104,21 @@ func (s providerSpec) build(cat modelsDevCatalog, opts *reasoningIndex) []ai.Mod
 			ContextWindow: m.contextWindow(),
 			MaxTokens:     m.maxTokens(),
 		}
+		if renamedTo != "" {
+			model.Name = renamedTo
+		}
 		if s.Tweak != nil {
 			s.Tweak(id, m, &model)
 		}
-		opts.record(s.ID, id, m)
+		opts.record(s.ID, modelID, m)
+
+		if modelID != id {
+			renamed[modelID] = true
+		}
 		out = append(out, model)
 	}
+
+	out = dedupeRenamed(out, renamed)
 
 	// An extra model is a stand-in for something upstream has not listed yet.
 	// When upstream catches up, the derived entry is the better one — it has
@@ -143,4 +170,33 @@ func withCompat(apply func(c *ai.CompatFlags)) func(string, modelsDevModel, *ai.
 		}
 		apply(out.Compat)
 	}
+}
+
+// dedupeRenamed resolves ids that two entries now share because an alias was
+// folded onto a canonical name.
+//
+// The canonical entry wins. Upstream publishes both when it is mid-rename, and
+// the aliased copy is the one whose metadata lags — so preferring it would
+// pick the staler of two descriptions of the same model.
+func dedupeRenamed(models []ai.Model, renamed map[string]bool) []ai.Model {
+	if len(renamed) == 0 {
+		return models
+	}
+
+	seen := map[string]int{}
+	var out []ai.Model
+	for _, m := range models {
+		idx, ok := seen[m.ID]
+		if !ok {
+			seen[m.ID] = len(out)
+			out = append(out, m)
+			continue
+		}
+		// A collision: keep whichever did not come from an alias. If both did,
+		// the first wins, which is stable because ids are sorted afterwards.
+		if !renamed[m.ID] {
+			out[idx] = m
+		}
+	}
+	return out
 }

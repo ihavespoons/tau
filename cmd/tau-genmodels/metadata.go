@@ -236,6 +236,9 @@ func applyThinkingLevels(m *ai.Model) {
 	if m.Provider == openRouterProviderID && m.ID == "z-ai/glm-5.2" {
 		mergeThinkingLevelMap(m, ai.ThinkingLevelMap{"xhigh": strptr("xhigh")})
 	}
+	if m.Provider == "ant-ling" && m.Reasoning {
+		mergeThinkingLevelMap(m, antLingRingThinkingLevels)
+	}
 	if m.Provider == "fireworks" && strings.Contains(m.ID, "glm-5p2") {
 		mergeThinkingLevelMap(m, ai.ThinkingLevelMap{
 			ai.ThinkingOff: strptr("none"), "minimal": nil,
