@@ -139,7 +139,7 @@ func normalizeToolCallID(id string, provider ai.ProviderId) string {
 func convertMessages(model *ai.Model, c ai.Context, cm compat) []message {
 	var out []message
 
-	normalize := func(id string) string { return normalizeToolCallID(id, model.Provider) }
+	normalize := func(id string, _ ai.AssistantMessage) string { return normalizeToolCallID(id, model.Provider) }
 	msgs := apishared.TransformMessages(c.Messages, model, normalize)
 
 	if c.SystemPrompt != "" {

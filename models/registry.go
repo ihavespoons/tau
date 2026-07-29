@@ -276,14 +276,17 @@ func (r *Registry) ProviderFor(m *ai.Model) *provider.Provider {
 // catalogued — the models are visible and selectable — but any attempt to use
 // one surfaces as a clean error rather than a nil dereference.
 func (r *Registry) buildCustomProvider(id, name, api, baseURL string, models []ai.Model, def ProviderDef) *provider.Provider {
-	if ai.Api(api) == ai.ApiOpenAICompletions && r.deps.Store != nil {
+	if r.deps.Store != nil {
 		key := ""
 		if def.APIKey != nil {
 			key = *def.APIKey
 		}
-		return provider.OpenAICompat(r.deps.Store, r.envContext(), provider.OpenAICompatOptions{
+		// Keyed dispatches on each MODEL's wire, so a models.json provider can
+		// declare any wire tau implements — not just chat-completions — and a
+		// wire tau does not implement fails naming itself.
+		return provider.Keyed(r.deps.Store, r.envContext(), provider.KeyedOptions{
 			ID: id, Name: name, BaseURL: baseURL,
-			Models: models, ConfiguredKey: key,
+			EnvKeys: auth.EnvKeysFor(id), Models: models, ConfiguredKey: key,
 		})
 	}
 	return &provider.Provider{ID: id, Name: name, Api: ai.Api(api), BaseURL: baseURL, Models: models}

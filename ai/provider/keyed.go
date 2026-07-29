@@ -7,6 +7,7 @@ import (
 	"github.com/ihavespoons/tau/ai"
 	"github.com/ihavespoons/tau/ai/api/anthropic"
 	"github.com/ihavespoons/tau/ai/api/openaichat"
+	"github.com/ihavespoons/tau/ai/api/openairesp"
 	"github.com/ihavespoons/tau/ai/auth"
 )
 
@@ -58,6 +59,8 @@ func Keyed(store auth.CredentialStore, env auth.EnvContext, o KeyedOptions) *Pro
 			return openaichat.StreamSimple(ctx, model, c, opts)
 		case ai.ApiAnthropicMessages:
 			return anthropic.StreamSimple(ctx, model, c, opts)
+		case ai.ApiOpenAIResponses:
+			return openairesp.StreamSimple(ctx, model, c, opts)
 		default:
 			return errStream(model, unsupportedWire(model))
 		}
@@ -75,6 +78,8 @@ func Keyed(store auth.CredentialStore, env auth.EnvContext, o KeyedOptions) *Pro
 			return openaichat.Stream(ctx, model, c, &openaichat.Options{StreamOptions: *opts})
 		case ai.ApiAnthropicMessages:
 			return anthropic.Stream(ctx, model, c, &anthropic.Options{StreamOptions: *opts})
+		case ai.ApiOpenAIResponses:
+			return openairesp.Stream(ctx, model, c, &openairesp.Options{StreamOptions: *opts})
 		default:
 			return errStream(model, unsupportedWire(model))
 		}
@@ -109,7 +114,7 @@ func dominantApi(models []ai.Model) ai.Api {
 // StreamableWires reports whether tau can talk to a model's wire at all.
 func StreamableWire(api ai.Api) bool {
 	switch api {
-	case ai.ApiOpenAICompletions, ai.ApiAnthropicMessages:
+	case ai.ApiOpenAICompletions, ai.ApiAnthropicMessages, ai.ApiOpenAIResponses:
 		return true
 	}
 	return false

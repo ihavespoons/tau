@@ -91,7 +91,17 @@ func downgradeUnsupportedImages(messages ai.MessageList, model *ai.Model) ai.Mes
 // redacted thinking cross-model, normalizes cross-model tool-call ids, skips
 // errored/aborted assistant turns, and synthesizes tool results for orphaned
 // tool calls.
-func TransformMessages(messages ai.MessageList, model *ai.Model, normalizeID func(string) string) ai.MessageList {
+// NormalizeIDFunc rewrites a replayed tool-call id.
+//
+// It receives the assistant message the call came from, not just the id,
+// because a wire may need to know whether the call is FOREIGN — from a
+// different provider or API — as opposed to merely from a different model of
+// the same provider. The responses wire distinguishes them: a foreign call's
+// item id is rehashed to avoid OpenAI's reasoning-pairing validation, while a
+// same-provider one keeps its own.
+type NormalizeIDFunc func(id string, source ai.AssistantMessage) string
+
+func TransformMessages(messages ai.MessageList, model *ai.Model, normalizeID NormalizeIDFunc) ai.MessageList {
 	toolCallIDMap := map[string]string{}
 	imageAware := downgradeUnsupportedImages(messages, model)
 
@@ -140,7 +150,7 @@ func TransformMessages(messages ai.MessageList, model *ai.Model, normalizeID fun
 						b.ThoughtSignature = ""
 					}
 					if !isSameModel && normalizeID != nil {
-						normalized := normalizeID(b.ID)
+						normalized := normalizeID(b.ID, m)
 						if normalized != b.ID {
 							toolCallIDMap[b.ID] = normalized
 							b.ID = normalized

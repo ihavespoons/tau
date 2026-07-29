@@ -88,8 +88,10 @@ func TestCustomProviderStreams(t *testing.T) {
 	}
 }
 
-// An api tau does not implement is still catalogued, but must fail cleanly
-// rather than dereferencing a nil stream function.
+// An api tau does not implement is still catalogued and still selectable —
+// hiding it would make a real provider look unsupported — but using it fails
+// naming the wire and the model, not with a nil dereference and not with a
+// bare "unsupported" the user cannot act on.
 func TestUnsupportedAPIIsCataloguedButNotCallable(t *testing.T) {
 	base := "https://example.invalid"
 	api := "some-future-wire"
@@ -102,11 +104,30 @@ func TestUnsupportedAPIIsCataloguedButNotCallable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reg.Resolve("exotic/m"); err != nil {
-		t.Errorf("the model should still be catalogued: %v", err)
+	match, err := reg.Resolve("exotic/m")
+	if err != nil {
+		t.Fatalf("the model should still be catalogued: %v", err)
 	}
-	if p := reg.Provider("exotic"); p == nil || p.StreamSimple != nil {
-		t.Error("an unimplemented wire must not pretend to stream")
+
+	p := reg.ProviderFor(match.Model)
+	if p == nil || p.StreamSimple == nil {
+		t.Fatal("a catalogued model needs a provider that can report why it fails")
+	}
+
+	stream := p.StreamSimple(context.Background(), match.Model,
+		ai.Context{Messages: ai.MessageList{ai.UserMessage{Content: ai.UserContent{Text: "hi"}}}},
+		&ai.SimpleStreamOptions{StreamOptions: ai.StreamOptions{APIKey: "k"}})
+	for range stream.Events() {
+	}
+
+	msg := stream.Result()
+	if msg.StopReason != ai.StopError {
+		t.Fatalf("stop reason: %q", msg.StopReason)
+	}
+	for _, want := range []string{"m", "some-future-wire"} {
+		if !strings.Contains(msg.ErrorMessage, want) {
+			t.Errorf("the error should name %q: %q", want, msg.ErrorMessage)
+		}
 	}
 }
 

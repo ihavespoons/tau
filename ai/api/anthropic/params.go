@@ -71,7 +71,8 @@ func convertContentBlocks(content ai.ContentList) any {
 func buildParams(model *ai.Model, c ai.Context, oauth bool, opts *Options) (*params, error) {
 	cc := cacheControlFor(model, opts.CacheRetention, opts.Env)
 	comp := resolveCompat(model)
-	transformed := transformMessages(c.Messages, model, normalizeToolCallID)
+	transformed := transformMessages(c.Messages, model,
+		func(id string, _ ai.AssistantMessage) string { return normalizeToolCallID(id) })
 
 	normalizeName := func(s string) string { return s }
 	if oauth {
