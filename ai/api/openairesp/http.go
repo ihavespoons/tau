@@ -25,13 +25,45 @@ func responsesURL(baseURL string) string {
 	return trimmed + "/responses"
 }
 
-// buildHeaders assembles tau's defaults, the model's own, then the caller's
-// overrides. A nil override suppresses a default, which is how a gateway drops
-// the Authorization header it does not want.
-func buildHeaders(model *ai.Model, opts *Options, cm compat) http.Header {
+// baseHeaders are what every request on this protocol carries.
+func baseHeaders() http.Header {
 	h := http.Header{}
 	h.Set("Content-Type", "application/json")
 	h.Set("Accept", "text/event-stream")
+	return h
+}
+
+// applyHeaderOverrides merges the caller's headers last, so they win. A nil
+// value suppresses a default, which is how a gateway drops the Authorization
+// header it does not want.
+func applyHeaderOverrides(h http.Header, overrides map[string]*string) {
+	for k, v := range overrides {
+		if v == nil {
+			h.Del(k)
+			continue
+		}
+		h.Set(k, *v)
+	}
+}
+
+// newJSONRequest builds the POST every variant sends.
+func newJSONRequest(ctx context.Context, endpoint string, body []byte) (*http.Request, error) {
+	return http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+}
+
+// httpClient applies the caller's timeout, or tau's default.
+func httpClient(timeoutMs int) *http.Client {
+	timeout := defaultTimeout
+	if timeoutMs > 0 {
+		timeout = time.Duration(timeoutMs) * time.Millisecond
+	}
+	return &http.Client{Timeout: timeout}
+}
+
+// buildHeaders assembles tau's defaults, the model's own, then the caller's
+// overrides.
+func buildHeaders(model *ai.Model, opts *Options, cm compat) http.Header {
+	h := baseHeaders()
 	if opts.APIKey != "" {
 		h.Set("Authorization", "Bearer "+opts.APIKey)
 	}
@@ -53,13 +85,7 @@ func buildHeaders(model *ai.Model, opts *Options, cm compat) http.Header {
 		}
 	}
 
-	for k, v := range opts.Headers {
-		if v == nil {
-			h.Del(k)
-			continue
-		}
-		h.Set(k, *v)
-	}
+	applyHeaderOverrides(h, opts.Headers)
 	return h
 }
 
@@ -69,18 +95,12 @@ func doRequest(ctx context.Context, model *ai.Model, opts *Options, cm compat, b
 		return nil, fmt.Errorf("no API key for provider %s", model.Provider)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, responsesURL(model.BaseURL), bytes.NewReader(body))
+	req, err := newJSONRequest(ctx, responsesURL(model.BaseURL), body)
 	if err != nil {
 		return nil, err
 	}
 	req.Header = buildHeaders(model, opts, cm)
-
-	timeout := defaultTimeout
-	if opts.TimeoutMs > 0 {
-		timeout = time.Duration(opts.TimeoutMs) * time.Millisecond
-	}
-	client := &http.Client{Timeout: timeout}
-	return client.Do(req)
+	return httpClient(opts.TimeoutMs).Do(req)
 }
 
 // hasAuthHeader reports whether the caller supplied authorization itself,

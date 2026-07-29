@@ -6,6 +6,7 @@ import (
 
 	"github.com/ihavespoons/tau/ai"
 	"github.com/ihavespoons/tau/ai/api/anthropic"
+	"github.com/ihavespoons/tau/ai/api/googlegenai"
 	"github.com/ihavespoons/tau/ai/api/openaichat"
 	"github.com/ihavespoons/tau/ai/api/openairesp"
 	"github.com/ihavespoons/tau/ai/auth"
@@ -61,6 +62,10 @@ func Keyed(store auth.CredentialStore, env auth.EnvContext, o KeyedOptions) *Pro
 			return anthropic.StreamSimple(ctx, model, c, opts)
 		case ai.ApiOpenAIResponses:
 			return openairesp.StreamSimple(ctx, model, c, opts)
+		case ai.ApiAzureOpenAIResponses:
+			return openairesp.StreamSimpleAzure(ctx, model, c, opts)
+		case ai.ApiGoogleGenerativeAI:
+			return googlegenai.StreamSimple(ctx, model, c, opts)
 		default:
 			return errStream(model, unsupportedWire(model))
 		}
@@ -80,6 +85,11 @@ func Keyed(store auth.CredentialStore, env auth.EnvContext, o KeyedOptions) *Pro
 			return anthropic.Stream(ctx, model, c, &anthropic.Options{StreamOptions: *opts})
 		case ai.ApiOpenAIResponses:
 			return openairesp.Stream(ctx, model, c, &openairesp.Options{StreamOptions: *opts})
+		case ai.ApiAzureOpenAIResponses:
+			return openairesp.StreamAzure(ctx, model, c,
+				&openairesp.AzureOptions{Options: openairesp.Options{StreamOptions: *opts}})
+		case ai.ApiGoogleGenerativeAI:
+			return googlegenai.Stream(ctx, model, c, &googlegenai.Options{StreamOptions: *opts})
 		default:
 			return errStream(model, unsupportedWire(model))
 		}
@@ -114,7 +124,8 @@ func dominantApi(models []ai.Model) ai.Api {
 // StreamableWires reports whether tau can talk to a model's wire at all.
 func StreamableWire(api ai.Api) bool {
 	switch api {
-	case ai.ApiOpenAICompletions, ai.ApiAnthropicMessages, ai.ApiOpenAIResponses:
+	case ai.ApiOpenAICompletions, ai.ApiAnthropicMessages,
+		ai.ApiOpenAIResponses, ai.ApiAzureOpenAIResponses, ai.ApiGoogleGenerativeAI:
 		return true
 	}
 	return false

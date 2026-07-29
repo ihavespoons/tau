@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/ihavespoons/tau/ai"
+	"github.com/ihavespoons/tau/ai/api/apishared"
 )
 
 // Thinking formats. Providers express "reason harder" a dozen different ways;
@@ -230,7 +231,8 @@ func resolveCacheRetention(retention ai.CacheRetention, env map[string]string) a
 	if retention != "" {
 		return retention
 	}
-	if env["TAU_CACHE_RETENTION"] == "long" || env["PI_CACHE_RETENTION"] == "long" {
+	if apishared.EnvValue(env, "TAU_CACHE_RETENTION") == "long" ||
+		apishared.EnvValue(env, "PI_CACHE_RETENTION") == "long" {
 		return ai.CacheLong
 	}
 	return ai.CacheShort

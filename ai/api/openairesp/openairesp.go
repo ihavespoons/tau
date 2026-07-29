@@ -49,19 +49,24 @@ func StreamSimple(ctx context.Context, model *ai.Model, c ai.Context, opts *ai.S
 	if opts == nil {
 		opts = &ai.SimpleStreamOptions{}
 	}
-	reasoning := opts.Reasoning
-	if reasoning != "" {
-		clamped := ai.ClampThinkingLevel(model, ai.ModelThinkingLevel(reasoning))
-		if clamped == ai.ThinkingOff {
-			reasoning = ""
-		} else {
-			reasoning = ai.ThinkingLevel(clamped)
-		}
-	}
 	return Stream(ctx, model, c, &Options{
 		StreamOptions: opts.StreamOptions,
-		Reasoning:     reasoning,
+		Reasoning:     clampReasoning(model, opts.Reasoning),
 	})
+}
+
+// clampReasoning holds a requested level to what the model actually supports,
+// and turns an unsupported one off rather than sending a name the endpoint
+// will reject.
+func clampReasoning(model *ai.Model, level ai.ThinkingLevel) ai.ThinkingLevel {
+	if level == "" {
+		return ""
+	}
+	clamped := ai.ClampThinkingLevel(model, ai.ModelThinkingLevel(level))
+	if clamped == ai.ThinkingOff {
+		return ""
+	}
+	return ai.ThinkingLevel(clamped)
 }
 
 func newOutput(model *ai.Model) *ai.AssistantMessage {

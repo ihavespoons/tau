@@ -11,6 +11,7 @@
 package apishared
 
 import (
+	"os"
 	"time"
 	"unicode/utf8"
 
@@ -297,4 +298,17 @@ func TrimSpace(s string) string {
 
 func isSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
+}
+
+// EnvValue resolves a provider configuration value.
+//
+// The scoped override map wins, then the real process environment. Checking
+// only the map — which is what tau did before — means a variable the user
+// exported in their shell is silently ignored, and the symptom is a setting
+// that appears to do nothing.
+func EnvValue(env map[string]string, name string) string {
+	if v, ok := env[name]; ok && v != "" {
+		return v
+	}
+	return os.Getenv(name)
 }

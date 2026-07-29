@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/ihavespoons/tau/ai"
+	"github.com/ihavespoons/tau/ai/api/apishared"
 )
 
 // compat is the resolved quirk set for one model. There are seven flags rather
@@ -94,7 +95,7 @@ func resolveCacheRetention(retention ai.CacheRetention, env map[string]string) a
 		return retention
 	}
 	for _, key := range []string{"TAU_CACHE_RETENTION", "PI_CACHE_RETENTION"} {
-		if v, ok := env[key]; ok && v == "long" {
+		if apishared.EnvValue(env, key) == "long" {
 			return ai.CacheLong
 		}
 	}
