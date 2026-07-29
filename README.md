@@ -42,6 +42,10 @@ tau -p "fix the failing test"    # one-shot, non-interactive
 tau -p --mode json "…"     # JSONL events, for scripts and CI
 ```
 
+Tools: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`. Search runs on
+ripgrep and fd, found on your PATH or downloaded into `~/.tau/agent/bin` on
+first use — set `TAU_OFFLINE=1` to refuse the download instead.
+
 Inside a session: `Enter` sends, `Alt+Enter` adds a newline, `Esc` stops the
 agent, `Ctrl+P` cycles models, `Ctrl+T` cycles thinking level, and `/help` lists
 the commands. Typing while the agent is working *steers* it — the message is
@@ -66,7 +70,8 @@ whether it needs cache markers, which wire it actually speaks.
 
 Not every wire is implemented yet — a model on one tau cannot talk to is
 listed and selectable, and says so by name rather than pretending not to exist.
-Anthropic's and OpenAI's chat-completions wires are live today.
+Live today: Anthropic messages, OpenAI chat-completions, and OpenAI responses,
+which between them cover most of the catalog.
 
 Anything not listed that speaks `/v1/chat/completions` — vLLM, llama.cpp,
 LiteLLM, Ollama, a private gateway — can be declared in
