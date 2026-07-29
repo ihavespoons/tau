@@ -7,6 +7,7 @@ import (
 	"github.com/ihavespoons/tau/ai"
 	"github.com/ihavespoons/tau/ai/api/anthropic"
 	"github.com/ihavespoons/tau/ai/api/googlegenai"
+	"github.com/ihavespoons/tau/ai/api/mistralconv"
 	"github.com/ihavespoons/tau/ai/api/openaichat"
 	"github.com/ihavespoons/tau/ai/api/openairesp"
 	"github.com/ihavespoons/tau/ai/auth"
@@ -71,6 +72,8 @@ func Keyed(store auth.CredentialStore, env auth.EnvContext, o KeyedOptions) *Pro
 			return googlegenai.StreamSimple(ctx, model, c, opts)
 		case ai.ApiGoogleVertex:
 			return googlegenai.StreamSimpleVertex(ctx, model, c, opts)
+		case ai.ApiMistralConversations:
+			return mistralconv.StreamSimple(ctx, model, c, opts)
 		default:
 			return errStream(model, unsupportedWire(model))
 		}
@@ -98,6 +101,8 @@ func Keyed(store auth.CredentialStore, env auth.EnvContext, o KeyedOptions) *Pro
 		case ai.ApiGoogleVertex:
 			return googlegenai.StreamVertex(ctx, model, c,
 				&googlegenai.VertexOptions{Options: googlegenai.Options{StreamOptions: *opts}})
+		case ai.ApiMistralConversations:
+			return mistralconv.Stream(ctx, model, c, &mistralconv.Options{StreamOptions: *opts})
 		default:
 			return errStream(model, unsupportedWire(model))
 		}
@@ -134,7 +139,7 @@ func StreamableWire(api ai.Api) bool {
 	switch api {
 	case ai.ApiOpenAICompletions, ai.ApiAnthropicMessages,
 		ai.ApiOpenAIResponses, ai.ApiAzureOpenAIResponses,
-		ai.ApiGoogleGenerativeAI, ai.ApiGoogleVertex:
+		ai.ApiGoogleGenerativeAI, ai.ApiGoogleVertex, ai.ApiMistralConversations:
 		return true
 	}
 	return false
