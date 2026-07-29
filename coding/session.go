@@ -322,7 +322,11 @@ func buildModels(store auth.CredentialStore) (*models.Registry, error) {
 	if err != nil {
 		cfg = nil
 	}
-	return models.NewRegistry(builtins, cfg)
+	// The deps are what let a models.json-declared provider authenticate and
+	// stream, rather than merely appear in the catalog.
+	return models.NewRegistry(builtins, cfg, models.Deps{
+		Store: store, Env: auth.OSContext{},
+	})
 }
 
 // resolveModel picks the model and thinking level for the run: explicit

@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/ihavespoons/tau/ai"
+	"github.com/ihavespoons/tau/ai/auth"
 	"github.com/ihavespoons/tau/ai/provider"
 )
 
@@ -18,14 +19,28 @@ type Registry struct {
 	// customAPIKeys records apiKey values declared in models.json so the auth
 	// layer can consult them for providers tau has no built-in flow for.
 	customAPIKeys map[string]string
+	deps          Deps
+}
+
+// Deps supply what a models.json-declared provider needs in order to
+// authenticate and stream. Omit them in tests that only inspect the catalog.
+type Deps struct {
+	Store auth.CredentialStore
+	Env   auth.EnvContext
 }
 
 // NewRegistry composes built-in providers with a models.json config. A nil
 // config yields the built-ins unchanged.
-func NewRegistry(builtins []*provider.Provider, cfg *Config) (*Registry, error) {
+//
+// Deps is variadic so catalog-only callers stay unchanged; without it, a
+// custom provider is catalogued but cannot stream.
+func NewRegistry(builtins []*provider.Provider, cfg *Config, deps ...Deps) (*Registry, error) {
 	r := &Registry{
 		byID:          map[string]*provider.Provider{},
 		customAPIKeys: map[string]string{},
+	}
+	if len(deps) > 0 {
+		r.deps = deps[0]
 	}
 
 	for _, p := range builtins {
@@ -66,20 +81,25 @@ func (r *Registry) applyProvider(id string, def ProviderDef) error {
 		if def.BaseURL == nil || *def.BaseURL == "" {
 			return fmt.Errorf("models: provider %q is not built in and has no \"baseUrl\"", id)
 		}
-		api := ""
-		if def.Api != nil {
+		// An unnamed api defaults to openai-completions: every self-hosted and
+		// proxy endpoint worth pointing tau at — llama.cpp, vLLM, LiteLLM,
+		// Ollama, and the gateways — exposes that shape, so requiring the
+		// field would be ceremony for the overwhelmingly common case.
+		api := string(ai.ApiOpenAICompletions)
+		if def.Api != nil && *def.Api != "" {
 			api = *def.Api
 		}
 		name := id
 		if def.Name != nil {
 			name = *def.Name
 		}
-		p := &provider.Provider{
-			ID: id, Name: name, Api: api, BaseURL: *def.BaseURL,
-		}
+
+		var models []ai.Model
 		for _, md := range def.Models {
-			p.Models = append(p.Models, buildModel(md, id, *def.BaseURL, api, def))
+			models = append(models, buildModel(md, id, *def.BaseURL, api, def))
 		}
+
+		p := r.buildCustomProvider(id, name, api, *def.BaseURL, models, def)
 		r.providers = append(r.providers, p)
 		r.byID[id] = p
 		return nil
@@ -249,4 +269,30 @@ func (r *Registry) ProviderFor(m *ai.Model) *provider.Provider {
 		return nil
 	}
 	return r.byID[m.Provider]
+}
+
+// buildCustomProvider turns a models.json provider entry into something that
+// can actually stream. A wire API tau does not implement still gets
+// catalogued — the models are visible and selectable — but any attempt to use
+// one surfaces as a clean error rather than a nil dereference.
+func (r *Registry) buildCustomProvider(id, name, api, baseURL string, models []ai.Model, def ProviderDef) *provider.Provider {
+	if ai.Api(api) == ai.ApiOpenAICompletions && r.deps.Store != nil {
+		key := ""
+		if def.APIKey != nil {
+			key = *def.APIKey
+		}
+		return provider.OpenAICompat(r.deps.Store, r.envContext(), provider.OpenAICompatOptions{
+			ID: id, Name: name, BaseURL: baseURL,
+			Models: models, ConfiguredKey: key,
+		})
+	}
+	return &provider.Provider{ID: id, Name: name, Api: ai.Api(api), BaseURL: baseURL, Models: models}
+}
+
+// envContext falls back to the process environment when none was supplied.
+func (r *Registry) envContext() auth.EnvContext {
+	if r.deps.Env != nil {
+		return r.deps.Env
+	}
+	return auth.OSContext{}
 }

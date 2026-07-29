@@ -294,3 +294,51 @@ func envNamePrefix(s string) string {
 	}
 	return s[:i]
 }
+
+// EnvAPIKeyAuth is the generic api-key auth used by every provider that
+// authenticates with a bearer key and nothing more exotic (Pi's
+// envApiKeyAuth).
+//
+// Resolution order is stored credential, then the configured value from
+// models.json, then the ambient environment. The configured value goes through
+// DefaultConfigValue, so `"apiKey": "$GROQ_API_KEY"` in models.json resolves
+// against the environment rather than being sent literally.
+func EnvAPIKeyAuth(providerID, name string, envVars []string, configured string) *APIKeyAuth {
+	return &APIKeyAuth{
+		Name: name,
+		Login: func(ctx context.Context, in Interaction) (*Credential, error) {
+			key, err := in.Prompt(ctx, Prompt{
+				Type: PromptSecret, Message: "Enter " + name,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return &Credential{Type: CredentialAPIKey, Key: key}, nil
+		},
+		Resolve: func(ac EnvContext, cred *Credential) (*AuthResult, error) {
+			if cred != nil && cred.Key != "" {
+				return &AuthResult{
+					Auth:   ModelAuth{APIKey: cred.Key},
+					Env:    cred.Env,
+					Source: "stored credential",
+				}, nil
+			}
+			if configured != "" {
+				if key := DefaultConfigValue(configured, nil); key != "" && !strings.HasPrefix(key, "$") {
+					return &AuthResult{Auth: ModelAuth{APIKey: key}, Source: "models.json"}, nil
+				}
+			}
+			for _, envVar := range envVars {
+				if key := ac.Env(envVar); key != "" {
+					return &AuthResult{Auth: ModelAuth{APIKey: key}, Source: envVar}, nil
+				}
+			}
+			// Fall back to the provider's own known env vars, so a built-in
+			// provider works with no configuration at all.
+			if key := EnvAPIKey(providerID, ac); key != "" {
+				return &AuthResult{Auth: ModelAuth{APIKey: key}, Source: "environment"}, nil
+			}
+			return nil, nil
+		},
+	}
+}
