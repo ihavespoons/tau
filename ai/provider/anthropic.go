@@ -7,11 +7,16 @@ import (
 	"github.com/ihavespoons/tau/ai/api/anthropic"
 	"github.com/ihavespoons/tau/ai/auth"
 	"github.com/ihavespoons/tau/ai/auth/oauth"
+	"github.com/ihavespoons/tau/ai/provider/catalog"
 )
 
 // AnthropicAuth returns the provider's auth handlers: API key (with
 // ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY resolution) plus the Claude
 // Pro/Max OAuth flow.
+// anthropicBaseURL is the default endpoint. Every catalogued Anthropic model
+// carries it too, but the provider needs one before a model is chosen.
+const anthropicBaseURL = "https://api.anthropic.com"
+
 func AnthropicAuth() auth.ProviderAuth {
 	return auth.ProviderAuth{
 		APIKey: auth.AnthropicAPIKeyAuth(),
@@ -28,7 +33,7 @@ func Anthropic(store auth.CredentialStore, env auth.EnvContext) *Provider {
 		ID: "anthropic", Name: "Anthropic", Api: ai.ApiAnthropicMessages,
 		BaseURL: anthropicBaseURL,
 		EnvKeys: []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"},
-		Models:  AnthropicModels(),
+		Models:  catalog.Models("anthropic"),
 	}
 
 	// apply resolves credentials into opts and may redirect the request to an

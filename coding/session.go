@@ -329,7 +329,7 @@ func loadSettings(cwd string, trusted bool) (*settings.Resolved, error) {
 // one stray comma would be the worse outcome. The problem is returned as a
 // warning rather than printed, so the caller decides where it surfaces.
 func BuildRegistry(store auth.CredentialStore) (*models.Registry, []string, error) {
-	builtins := []*provider.Provider{provider.Anthropic(store, auth.OSContext{})}
+	builtins := provider.Builtins(store, auth.OSContext{})
 
 	var warnings []string
 	cfg, err := models.LoadConfig(config.ModelsPath())

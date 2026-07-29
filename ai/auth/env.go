@@ -342,3 +342,9 @@ func EnvAPIKeyAuth(providerID, name string, envVars []string, configured string)
 		},
 	}
 }
+
+// EnvKeysFor returns the environment variables that can supply a provider's
+// API key, most specific first. An unknown provider has none.
+func EnvKeysFor(providerID string) []string {
+	return append([]string(nil), apiKeyEnvVars[providerID]...)
+}

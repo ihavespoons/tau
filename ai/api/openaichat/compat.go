@@ -235,3 +235,85 @@ func resolveCacheRetention(retention ai.CacheRetention, env map[string]string) a
 	}
 	return ai.CacheShort
 }
+
+// SupportsDirectReasoningEffort reports whether this model takes a thinking
+// level as a plain effort string on this wire.
+//
+// It exists for the catalog generator, which has to decide whether attaching a
+// models.dev thinking-level map to a model would help or would name levels the
+// provider has never heard of. That decision depends on compat detection, and
+// compat detection lives here.
+func SupportsDirectReasoningEffort(model *ai.Model) bool {
+	c := resolveCompat(model)
+	return c.ThinkingFormat == thinkingOpenAI && c.SupportsReasoningEffort
+}
+
+// completionsDefaults are the flag values that need no recording: a model
+// whose detection agrees with these carries no compat block at all.
+var completionsDefaults = compat{
+	SupportsStore:              true,
+	SupportsDeveloperRole:      true,
+	SupportsReasoningEffort:    true,
+	SupportsUsageInStreaming:   true,
+	MaxTokensField:             maxTokensCompletion,
+	ThinkingFormat:             thinkingOpenAI,
+	SupportsStrictMode:         true,
+	SessionAffinityFormat:      affinityOpenAI,
+	SupportsLongCacheRetention: true,
+}
+
+// DetectedCompatDelta returns the flags that detection derives for this model
+// and that differ from the chat-completions defaults, or nil when detection
+// produces the defaults exactly.
+//
+// It exists so the catalog generator can bake detection's own conclusions into
+// the compiled catalog rather than reimplementing them. That matters more than
+// it sounds: the catalog is read by tools that never call detectCompat — a
+// model browser, an export, Pi's own catalog for comparison — and a flag that
+// only exists at request time is invisible to all of them.
+func DetectedCompatDelta(model *ai.Model) *ai.CompatFlags {
+	c := detectCompat(model)
+	d := completionsDefaults
+
+	out := &ai.CompatFlags{}
+	set := false
+	diffBool := func(got, want bool, field **bool) {
+		if got != want {
+			v := got
+			*field = &v
+			set = true
+		}
+	}
+	diffStr := func(got, want string, field **string) {
+		if got != want {
+			v := got
+			*field = &v
+			set = true
+		}
+	}
+
+	diffBool(c.SupportsStore, d.SupportsStore, &out.SupportsStore)
+	diffBool(c.SupportsDeveloperRole, d.SupportsDeveloperRole, &out.SupportsDeveloperRole)
+	diffBool(c.SupportsReasoningEffort, d.SupportsReasoningEffort, &out.SupportsReasoningEffort)
+	diffBool(c.SupportsUsageInStreaming, d.SupportsUsageInStreaming, &out.SupportsUsageInStreaming)
+	diffStr(c.MaxTokensField, d.MaxTokensField, &out.MaxTokensField)
+	diffBool(c.RequiresToolResultName, d.RequiresToolResultName, &out.RequiresToolResultName)
+	diffBool(c.RequiresAssistantAfterToolResult, d.RequiresAssistantAfterToolResult, &out.RequiresAssistantAfterToolResult)
+	diffBool(c.RequiresThinkingAsText, d.RequiresThinkingAsText, &out.RequiresThinkingAsText)
+	diffBool(c.RequiresReasoningContentOnAssistantMessages, d.RequiresReasoningContentOnAssistantMessages,
+		&out.RequiresReasoningContentOnAssistantMessages)
+	diffStr(c.ThinkingFormat, d.ThinkingFormat, &out.ThinkingFormat)
+	diffBool(c.ZaiToolStream, d.ZaiToolStream, &out.ZaiToolStream)
+	diffBool(c.SupportsStrictMode, d.SupportsStrictMode, &out.SupportsStrictMode)
+	diffBool(c.SupportsOpenAIGrammarTools, d.SupportsOpenAIGrammarTools, &out.SupportsOpenAIGrammarTools)
+	diffBool(c.SendSessionAffinityHeaders, d.SendSessionAffinityHeaders, &out.SendSessionAffinityHeaders)
+	diffBool(c.SupportsLongCacheRetention, d.SupportsLongCacheRetention, &out.SupportsLongCacheRetention)
+
+	// cacheControlFormat and sessionAffinityFormat are omitted deliberately:
+	// they are re-derived identically at request time, and recording them
+	// would make every OpenRouter entry carry redundant fields.
+	if !set {
+		return nil
+	}
+	return out
+}

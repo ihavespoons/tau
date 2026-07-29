@@ -2,3 +2,8 @@ dist/
 *.test
 coverage.out
 .DS_Store
+
+# Local builds. The released binaries come from GoReleaser, never from a
+# working tree.
+/tau
+/tau-genmodels
