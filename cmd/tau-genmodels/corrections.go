@@ -1,6 +1,11 @@
 package main
 
-import "github.com/ihavespoons/tau/ai"
+import (
+	"regexp"
+	"strings"
+
+	"github.com/ihavespoons/tau/ai"
+)
 
 // The tables here are hand-verified facts about specific models that models.dev
 // either does not record or records differently from how the provider behaves.
@@ -163,3 +168,111 @@ var mistralExtraModels = []ai.Model{{
 	}},
 	ContextWindow: 262144, MaxTokens: 262144,
 }}
+
+// openRouterKimiK3 are the ids OpenRouter serves Kimi K3 under. Its output
+// limit is reported wrong or not at all, so it is pinned.
+var openRouterKimiK3 = map[string]bool{
+	"moonshotai/kimi-k3": true, "~moonshotai/kimi-latest": true,
+}
+
+const kimiK3MaxTokens = 131072
+
+// tweakOpenRouter pins the handful of OpenRouter entries whose upstream
+// metadata is wrong or still moving. Each is a fact checked against the real
+// endpoint; without them a request either over-runs a limit the aggregator
+// misreports, or the session's cost estimate is wrong.
+func tweakOpenRouter(m *ai.Model) {
+	if openRouterKimiK3[m.ID] {
+		m.MaxTokens = kimiK3MaxTokens
+	}
+	switch {
+	case m.ID == "moonshotai/kimi-k2.5":
+		m.Cost.Input, m.Cost.Output, m.Cost.CacheRead = 0.41, 2.06, 0.07
+		m.MaxTokens = 4096
+	case strings.HasPrefix(m.ID, "moonshotai/kimi-k2.6"):
+		mergeCompat(m, &ai.CompatFlags{
+			SupportsDeveloperRole:                       boolptr(false),
+			RequiresReasoningContentOnAssistantMessages: boolptr(true),
+		})
+	case m.ID == "z-ai/glm-5":
+		m.Cost.Input, m.Cost.Output, m.Cost.CacheRead = 0.6, 1.9, 0.119
+	}
+
+	// OpenRouter's "~" prefix marks a floor-priced routing variant of the same
+	// upstream model, so ~anthropic/… is still Anthropic and still caches.
+	// Recording the flag here is what makes those variants cache at all: the
+	// wire's own detection matches the unprefixed form only.
+	if anthropicViaOpenRouter.MatchString(m.ID) {
+		mergeCompat(m, &ai.CompatFlags{CacheControlFormat: strptr("anthropic")})
+	}
+}
+
+var anthropicViaOpenRouter = regexp.MustCompile(`^~?anthropic/`)
+
+// tweakVercelGateway applies the gateway's one pinned limit.
+func tweakVercelGateway(m *ai.Model) {
+	if m.ID == "moonshotai/kimi-k3" {
+		m.MaxTokens = kimiK3MaxTokens
+	}
+}
+
+// openRouterExtraModels covers what the aggregator's own catalog omits.
+//
+// Fusion is a router alias rather than a model: its metadata does not
+// advertise tool support, but the alias resolves to a concrete model that can
+// call tools, so filtering on the advertised parameters would hide a usable
+// entry.
+// Neither carries a rate: both route to whichever model they pick and bill for
+// that one, so any figure recorded here would be a guess presented as a fact.
+var openRouterExtraModels = []ai.Model{
+	{
+		ID: "auto", Name: "Auto",
+		Api: ai.ApiOpenAICompletions, Provider: openRouterProviderID, BaseURL: openRouterBaseURL,
+		Reasoning: true,
+		Input:     []string{"text", "image"},
+		Cost:      ai.ModelCost{},
+		// The window is the largest any routed model offers.
+		ContextWindow: 2000000, MaxTokens: 30000,
+	},
+	{
+		ID: "openrouter/fusion", Name: "OpenRouter: Fusion",
+		Api: ai.ApiOpenAICompletions, Provider: openRouterProviderID, BaseURL: openRouterBaseURL,
+		Reasoning:     true,
+		Input:         []string{"text"},
+		Cost:          ai.ModelCost{},
+		ContextWindow: 1000000, MaxTokens: 30000,
+	},
+}
+
+// deepseekV4ThinkingLevels is DeepSeek V4's own vocabulary: it reasons at two
+// settings and cannot be asked for a lower one.
+func deepseekV4ThinkingLevels(providerID ai.ProviderId) ai.ThinkingLevelMap {
+	m := ai.ThinkingLevelMap{
+		"minimal": nil, "low": nil, "medium": nil,
+		"high": strptr("high"), "max": strptr("max"),
+	}
+	if providerID == openRouterProviderID {
+		// OpenRouter maps its own top tier onto the model's, and does not
+		// expose the model's "max".
+		m["xhigh"] = strptr("xhigh")
+		m["max"] = nil
+	}
+	return m
+}
+
+// applyDeepSeekV4Compat gives a DeepSeek V4 model the replay rule its family
+// needs, wherever it is served from.
+//
+// The thinking format travels with it only when tau talks to DeepSeek
+// directly. An aggregator that already normalises reasoning — OpenRouter and
+// opencode both do — would be handed a dialect it does not speak, so those two
+// keep their own format and take just the replay requirement.
+func applyDeepSeekV4Compat(m *ai.Model) {
+	mergeCompat(m, &ai.CompatFlags{
+		RequiresReasoningContentOnAssistantMessages: boolptr(true),
+	})
+	if m.Provider == openRouterProviderID || m.Provider == "opencode" {
+		return
+	}
+	mergeCompat(m, &ai.CompatFlags{ThinkingFormat: strptr("deepseek")})
+}

@@ -87,6 +87,22 @@ func buildAll(cat modelsDevCatalog, dataDir string) (map[string][]ai.Model, erro
 		out[spec.ID] = models
 	}
 
+	// The aggregators publish their own catalogs; models.dev does not describe
+	// them in a usable form.
+	external := map[string]func(string) ([]ai.Model, error){
+		openRouterProviderID:  buildOpenRouter,
+		vercelGatewayProvider: buildVercelGateway,
+	}
+	for id, build := range external {
+		models, err := build(dataDir)
+		if err != nil {
+			return nil, fmt.Errorf("building %s: %w", id, err)
+		}
+		if len(models) > 0 {
+			out[id] = models
+		}
+	}
+
 	// Corrections run after every provider is built, because several of them
 	// depend on the finished model rather than on its models.dev source.
 	for _, models := range out {

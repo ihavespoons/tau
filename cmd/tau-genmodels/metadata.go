@@ -223,6 +223,19 @@ func applyThinkingLevels(m *ai.Model) {
 		})
 	}
 
+	if m.Api == ai.ApiOpenAICompletions && strings.Contains(m.ID, "deepseek-v4") {
+		mergeThinkingLevelMap(m, deepseekV4ThinkingLevels(m.Provider))
+		applyDeepSeekV4Compat(m)
+	}
+	if m.Provider == openRouterProviderID && strings.HasPrefix(m.ID, "inception/mercury-2") {
+		// Mercury 2's instant mode — reasoning effort "none" — turns off tool
+		// calling. Marking "off" unsupported makes the wire omit the parameter
+		// rather than default to it, which would silently disarm every tool.
+		mergeThinkingLevelMap(m, ai.ThinkingLevelMap{ai.ThinkingOff: nil})
+	}
+	if m.Provider == openRouterProviderID && m.ID == "z-ai/glm-5.2" {
+		mergeThinkingLevelMap(m, ai.ThinkingLevelMap{"xhigh": strptr("xhigh")})
+	}
 	if m.Provider == "groq" && m.ID == "qwen/qwen3-32b" {
 		mergeThinkingLevelMap(m, ai.ThinkingLevelMap{
 			"minimal": nil, "low": nil, "medium": nil, "high": strptr("default"),

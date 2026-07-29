@@ -19,6 +19,8 @@ var Catalogs = map[string][]ai.Model{
 	"moonshotai":            MoonshotaiModels,
 	"moonshotai-cn":         MoonshotaiCNModels,
 	"openai":                OpenaiModels,
+	"openrouter":            OpenrouterModels,
+	"vercel-ai-gateway":     VercelAIGatewayModels,
 	"xai":                   XaiModels,
 	"xiaomi":                XiaomiModels,
 }

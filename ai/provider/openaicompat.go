@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ihavespoons/tau/ai"
+	"github.com/ihavespoons/tau/ai/api/anthropic"
 	"github.com/ihavespoons/tau/ai/api/openaichat"
 	"github.com/ihavespoons/tau/ai/auth"
 )
@@ -39,44 +40,7 @@ func OpenAICompat(store auth.CredentialStore, env auth.EnvContext, o OpenAICompa
 		p.Name = o.ID
 	}
 
-	providerAuth := auth.ProviderAuth{
-		APIKey: auth.EnvAPIKeyAuth(o.ID, p.Name+" API key", o.EnvKeys, o.ConfiguredKey),
-	}
-
-	// apply resolves credentials per request, exactly as the anthropic
-	// provider does: stored credential first, then models.json, then ambient
-	// environment.
-	apply := func(ctx context.Context, model *ai.Model, opts *ai.StreamOptions) error {
-		if opts.APIKey != "" {
-			return nil // an explicit key wins; no resolution needed
-		}
-		res, err := auth.Resolve(ctx, o.ID, providerAuth, store, env, nil)
-		if err != nil {
-			return err
-		}
-		if res == nil {
-			hint := "set an API key in ~/.tau/agent/models.json"
-			if len(o.EnvKeys) > 0 {
-				hint = "set " + o.EnvKeys[0]
-			}
-			return &auth.Error{
-				Code:    auth.CodeAuth,
-				Message: "no credentials for " + o.ID + ": " + hint,
-			}
-		}
-		opts.APIKey = res.Auth.APIKey
-		if len(res.Auth.Headers) > 0 {
-			if opts.Headers == nil {
-				opts.Headers = map[string]*string{}
-			}
-			for k, v := range res.Auth.Headers {
-				if _, set := opts.Headers[k]; !set {
-					opts.Headers[k] = v
-				}
-			}
-		}
-		return nil
-	}
+	apply := keyResolver(store, env, o.ID, p.Name, o.EnvKeys, o.ConfiguredKey)
 
 	p.StreamSimple = func(ctx context.Context, model *ai.Model, c ai.Context, opts *ai.SimpleStreamOptions) *ai.MessageStream {
 		if opts == nil {
@@ -106,4 +70,95 @@ func OpenAICompatAuth(providerID, name string, envKeys []string) auth.ProviderAu
 	return auth.ProviderAuth{
 		APIKey: auth.EnvAPIKeyAuth(providerID, name+" API key", envKeys, ""),
 	}
+}
+
+// keyResolver builds the per-request credential step shared by the key-only
+// providers: stored credential first, then models.json, then ambient
+// environment. Anthropic proper does not use it — it has an OAuth flow and a
+// base-URL redirect that do not fit this shape.
+func keyResolver(store auth.CredentialStore, env auth.EnvContext, id, name string, envKeys []string, configuredKey string) func(context.Context, *ai.Model, *ai.StreamOptions) error {
+	providerAuth := auth.ProviderAuth{
+		APIKey: auth.EnvAPIKeyAuth(id, name+" API key", envKeys, configuredKey),
+	}
+
+	return func(ctx context.Context, _ *ai.Model, opts *ai.StreamOptions) error {
+		if opts.APIKey != "" {
+			return nil // an explicit key wins; no resolution needed
+		}
+		res, err := auth.Resolve(ctx, id, providerAuth, store, env, nil)
+		if err != nil {
+			return err
+		}
+		if res == nil {
+			hint := "set an API key in ~/.tau/agent/models.json"
+			if len(envKeys) > 0 {
+				hint = "set " + envKeys[0]
+			}
+			return &auth.Error{
+				Code:    auth.CodeAuth,
+				Message: "no credentials for " + id + ": " + hint,
+			}
+		}
+		opts.APIKey = res.Auth.APIKey
+		for k, v := range res.Auth.Headers {
+			if opts.Headers == nil {
+				opts.Headers = map[string]*string{}
+			}
+			if _, set := opts.Headers[k]; !set {
+				opts.Headers[k] = v
+			}
+		}
+		return nil
+	}
+}
+
+// AnthropicCompatOptions describes a provider that speaks Anthropic's messages
+// wire without being Anthropic — a gateway or a vendor that adopted the shape.
+type AnthropicCompatOptions struct {
+	ID      string
+	Name    string
+	BaseURL string
+	EnvKeys []string
+	Models  []ai.Model
+	// ConfiguredKey is an apiKey value from models.json; a literal or a `$VAR`.
+	ConfiguredKey string
+}
+
+// AnthropicCompat builds a key-authenticated provider on Anthropic's wire.
+//
+// It is deliberately separate from Anthropic(): that one carries an OAuth
+// flow, a Claude-subscription base-URL redirect, and beta headers that belong
+// to Anthropic's own endpoint and would be wrong to send anywhere else.
+func AnthropicCompat(store auth.CredentialStore, env auth.EnvContext, o AnthropicCompatOptions) *Provider {
+	p := &Provider{
+		ID: ai.ProviderId(o.ID), Name: o.Name, Api: ai.ApiAnthropicMessages,
+		BaseURL: o.BaseURL, EnvKeys: o.EnvKeys, Models: o.Models,
+	}
+	if p.Name == "" {
+		p.Name = o.ID
+	}
+
+	apply := keyResolver(store, env, o.ID, p.Name, o.EnvKeys, o.ConfiguredKey)
+
+	p.StreamSimple = func(ctx context.Context, model *ai.Model, c ai.Context, opts *ai.SimpleStreamOptions) *ai.MessageStream {
+		if opts == nil {
+			opts = &ai.SimpleStreamOptions{}
+		}
+		if err := apply(ctx, model, &opts.StreamOptions); err != nil {
+			return errStream(model, err)
+		}
+		return anthropic.StreamSimple(ctx, model, c, opts)
+	}
+
+	p.Stream = func(ctx context.Context, model *ai.Model, c ai.Context, opts *ai.StreamOptions) *ai.MessageStream {
+		if opts == nil {
+			opts = &ai.StreamOptions{}
+		}
+		if err := apply(ctx, model, opts); err != nil {
+			return errStream(model, err)
+		}
+		return anthropic.Stream(ctx, model, c, &anthropic.Options{StreamOptions: *opts})
+	}
+
+	return p
 }

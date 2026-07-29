@@ -12,6 +12,8 @@ import (
 // compiled models but no entry here still works; it is just listed by its id.
 var builtinNames = map[string]string{
 	"anthropic":             "Anthropic",
+	"vercel-ai-gateway":     "Vercel AI Gateway",
+	"openrouter":            "OpenRouter",
 	"cerebras":              "Cerebras",
 	"cloudflare-workers-ai": "Cloudflare Workers AI",
 	"google":                "Google",
@@ -64,8 +66,14 @@ func builtin(id string, store auth.CredentialStore, env auth.EnvContext) *Provid
 		api, baseURL = models[0].Api, models[0].BaseURL
 	}
 
-	if api == ai.ApiOpenAICompletions {
+	switch api {
+	case ai.ApiOpenAICompletions:
 		return OpenAICompat(store, env, OpenAICompatOptions{
+			ID: id, Name: name, BaseURL: baseURL,
+			EnvKeys: auth.EnvKeysFor(id), Models: models,
+		})
+	case ai.ApiAnthropicMessages:
+		return AnthropicCompat(store, env, AnthropicCompatOptions{
 			ID: id, Name: name, BaseURL: baseURL,
 			EnvKeys: auth.EnvKeysFor(id), Models: models,
 		})
