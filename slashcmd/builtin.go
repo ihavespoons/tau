@@ -40,6 +40,11 @@ var Builtins = []Builtin{
 	{Name: "resume", Description: "Resume a different session"},
 	{Name: "reload", Description: "Reload keybindings, extensions, skills, prompts, themes, and context files"},
 	{Name: "quit", Description: "Quit tau"},
+
+	// tau's own addition. Pi sets labels from inside its tree dialog, which is
+	// a per-item action tau's picker does not have; a command reaches the same
+	// feature and works headless besides.
+	{Name: "label", Description: "Label the current point in the session (no argument clears it)", ArgumentHint: "<text>"},
 }
 
 // Host is what built-in commands act on. The coding layer implements it; a
@@ -56,6 +61,20 @@ type Host interface {
 	SetSessionName(name string) error
 	// SessionInfo renders a human-readable session summary.
 	SessionInfo() string
+	// Compact summarizes older history into a checkpoint. instructions is an
+	// optional focus for the summary.
+	Compact(ctx context.Context, instructions string) (string, error)
+	// SessionTree renders the branch structure.
+	SessionTree() string
+	// SetLabel bookmarks the current position. An empty label clears it.
+	SetLabel(ctx context.Context, label string) (string, error)
+	// ForkPoints renders the places a fork or rewind can start from.
+	ForkPoints() string
+	// MoveTo repositions the conversation at an entry in the tree.
+	MoveTo(ctx context.Context, entryID string) (string, error)
+	// ForkSession copies the session up to an entry into a new one and
+	// switches to it. An empty entryID copies the whole session.
+	ForkSession(ctx context.Context, entryID string) (string, error)
 }
 
 // Interactive is the extra surface a host with a UI provides. Built-in
@@ -81,6 +100,10 @@ type Interactive interface {
 	CopyLast(ctx context.Context) (string, error)
 	// Hotkeys renders the host's key bindings.
 	Hotkeys() string
+	// NavigateTree opens the branch picker and moves to the choice.
+	NavigateTree(ctx context.Context) (string, error)
+	// SelectForkPoint opens the fork picker and forks at the choice.
+	SelectForkPoint(ctx context.Context) (string, error)
 }
 
 // RegisterBuiltins adds every built-in command to the registry.
@@ -143,6 +166,20 @@ func RegisterBuiltins(r *Registry, host Host) {
 			r.Register(New(info, plainOp(ui, func(ctx context.Context, _ string) (string, error) {
 				return ui.CopyLast(ctx)
 			})))
+		case "compact":
+			r.Register(New(info, compactRun(host)))
+		case "label":
+			r.Register(New(info, plainHostOp(host, func(ctx context.Context, args string) (string, error) {
+				return host.SetLabel(ctx, strings.TrimSpace(args))
+			})))
+		case "tree":
+			r.Register(New(info, treeRun(host, ui)))
+		case "fork":
+			r.Register(New(info, forkRun(host, ui)))
+		case "clone":
+			r.Register(New(info, sessionOp2(host, func(ctx context.Context, _ string) (string, error) {
+				return host.ForkSession(ctx, "")
+			})))
 		default:
 			r.Register(New(info, nil)) // advertised; ErrNotImplemented when run
 		}
@@ -185,6 +222,85 @@ func sessionOp(ui Interactive, fn func(context.Context, string) (string, error))
 			return Result{}, err
 		}
 		return Result{Output: out, SessionChanged: true}, nil
+	}
+}
+
+// sessionOp2 is sessionOp for commands served by the plain Host rather than a
+// UI: they replace the session, so the host has to redraw.
+func sessionOp2(host Host, fn func(context.Context, string) (string, error)) func(context.Context, string) (Result, error) {
+	if host == nil {
+		return nil
+	}
+	return func(ctx context.Context, args string) (Result, error) {
+		out, err := fn(ctx, args)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{Output: out, SessionChanged: true}, nil
+	}
+}
+
+// plainHostOp adapts a Host method that returns text to a command.
+func plainHostOp(host Host, fn func(context.Context, string) (string, error)) func(context.Context, string) (Result, error) {
+	if host == nil {
+		return nil
+	}
+	return func(ctx context.Context, args string) (Result, error) {
+		out, err := fn(ctx, args)
+		return Result{Output: out}, err
+	}
+}
+
+func compactRun(host Host) func(context.Context, string) (Result, error) {
+	if host == nil {
+		return nil
+	}
+	return func(ctx context.Context, args string) (Result, error) {
+		out, err := host.Compact(ctx, strings.TrimSpace(args))
+		return Result{Output: out}, err
+	}
+}
+
+// treeRun serves /tree three ways: an explicit id moves there, a UI opens the
+// picker, and a headless run with no argument prints the tree. The last one
+// matters — a scripted session still needs to see the shape of its history.
+func treeRun(host Host, ui Interactive) func(context.Context, string) (Result, error) {
+	if host == nil {
+		return nil
+	}
+	return func(ctx context.Context, args string) (Result, error) {
+		if id := strings.TrimSpace(args); id != "" {
+			out, err := host.MoveTo(ctx, id)
+			return Result{Output: out}, err
+		}
+		if ui != nil {
+			out, err := ui.NavigateTree(ctx)
+			return Result{Output: out}, err
+		}
+		return Result{Output: host.SessionTree()}, nil
+	}
+}
+
+func forkRun(host Host, ui Interactive) func(context.Context, string) (Result, error) {
+	if host == nil {
+		return nil
+	}
+	return func(ctx context.Context, args string) (Result, error) {
+		if id := strings.TrimSpace(args); id != "" {
+			out, err := host.ForkSession(ctx, id)
+			if err != nil {
+				return Result{}, err
+			}
+			return Result{Output: out, SessionChanged: true}, nil
+		}
+		if ui != nil {
+			out, err := ui.SelectForkPoint(ctx)
+			if err != nil {
+				return Result{}, err
+			}
+			return Result{Output: out, SessionChanged: true}, nil
+		}
+		return Result{Output: host.ForkPoints()}, nil
 	}
 }
 

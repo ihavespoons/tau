@@ -6,8 +6,9 @@ same minimalist philosophy — shipped as a single static binary with no runtime
 dependencies.
 
 > **Status: early development.** tau is being built in phases toward parity with
-> Pi v0.82.1. The interactive agent works on Anthropic models; other providers,
-> session trees, and the extension subprocess protocol are still landing.
+> Pi v0.82.1. The interactive agent, all ten wire APIs, session trees and Pi
+> import are in; the extension subprocess protocol, skills, themes and the
+> HTML export are still landing.
 >
 > **tau does not ask before it acts.** It edits files and runs shell commands
 > without a confirmation prompt. Run it on a clean git tree or in a scratch
@@ -139,6 +140,54 @@ dozen providers resell the same models.
 
 To refresh the compiled catalogs after an upstream change:
 `go run ./cmd/tau-genmodels -refresh`.
+
+## Long sessions
+
+A conversation that outgrows the model's context window is compacted: the older
+part is replaced by a structured summary, and recent work is kept verbatim. It
+happens on its own before a turn that would not fit, and again if the provider
+rejects one for length anyway — which is the case no estimate can predict, and
+the one where the alternative is a failed turn. `/compact` forces it, and takes
+an optional focus (`/compact keep the migration details`).
+
+Files are tracked separately from the prose. A summary may paraphrase what was
+decided; it must not paraphrase which files were read and which were changed, so
+those come out as an exact list.
+
+## Session trees
+
+A session is an append-only tree, not a list. Nothing is ever deleted:
+
+```
+/tree            go back to an earlier point; later branches stay in the file
+/fork            copy the session up to a chosen message and continue there
+/clone           copy the whole session
+/label <text>    bookmark where you are, so it is findable later
+```
+
+Going back offers to summarize the branch being left, so the next turn knows the
+exploration happened instead of silently losing it.
+
+## Coming from Pi
+
+`tau import` reads `~/.pi/agent` and reports what is there. Nothing is copied
+until you say what to bring:
+
+```sh
+tau import                      # what does this Pi installation contain?
+tau import --sessions           # history only
+tau import --all --dry-run      # everything — but show me first
+tau import --all                # everything, including stored credentials
+```
+
+Sessions land where tau looks for them, because the working-directory encoding
+is byte-identical to Pi's: an imported conversation is found by `tau -c` in the
+directory it came from. Older session formats are migrated on the way in.
+
+Your Pi installation is never modified — not the sessions, not the credentials.
+The two can coexist while you decide, and an import that damages what it
+imported is not one you would run twice. Files that already exist under `~/.tau`
+are left alone unless you pass `--overwrite`.
 
 ## MCP
 

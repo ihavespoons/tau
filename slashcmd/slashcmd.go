@@ -71,7 +71,7 @@ var ErrNotImplemented = fmt.Errorf("not implemented in this phase")
 // It is not safe for concurrent mutation; register everything during setup,
 // then read.
 type Registry struct {
-	order []string
+	order  []string
 	byName map[string]Command
 }
 

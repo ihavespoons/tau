@@ -2,6 +2,7 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,16 @@ type JSONLStorage struct {
 	// types or message roles. The entries are kept; these explain what was not
 	// understood.
 	soft []error
+	// migrated reports that the file was written in an older format.
+	migrated bool
+}
+
+// Migrated reports whether the session was upgraded from an older format when
+// it was opened.
+func (s *JSONLStorage) Migrated() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.migrated
 }
 
 var _ Storage = (*JSONLStorage)(nil)
@@ -76,13 +87,78 @@ func CreateJSONL(path string, opts CreateOptions) (*JSONLStorage, error) {
 	return &JSONLStorage{path: path, header: header, ix: newIndex()}, nil
 }
 
-// OpenJSONL reads an existing session file.
+// OpenJSONL reads an existing session file, migrating it in place if it was
+// written in an older format.
 //
 // Lines that cannot be fully understood are preserved verbatim and reported
 // through SoftErrors rather than failing the open — a session written by a
 // newer agent, or containing one corrupt entry, still loads. A missing or
 // invalid header is fatal.
 func OpenJSONL(path string) (*JSONLStorage, error) {
+	return openJSONL(path, true)
+}
+
+// OpenJSONLReadOnly opens a session without ever writing to it. An older
+// format is still migrated for this process's view of the file.
+//
+// This is what reads someone else's session — a Pi file being imported, or one
+// only being inspected. Migration would otherwise rewrite the source, and an
+// import that mutates its input is not an import.
+func OpenJSONLReadOnly(path string) (*JSONLStorage, error) {
+	return openJSONL(path, false)
+}
+
+func openJSONL(path string, rewriteOnMigrate bool) (*JSONLStorage, error) {
+	lines, err := readJSONLines(path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Migration must happen before decoding: a v1 entry has no id and no
+	// parentId, so there is no tree for the decoder to build until it does.
+	// The rewrite is not optional when tau will append to this file — appended
+	// entries parent onto ids minted here, and minting is random, so a second
+	// open of an unmigrated file would produce different ids and dangling
+	// parents.
+	migrated, changed, err := MigrateLines(lines)
+	if err != nil {
+		return nil, err
+	}
+	if changed {
+		lines = migrated
+		if rewriteOnMigrate {
+			if err := rewriteJSONL(path, lines); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	s := &JSONLStorage{path: path, ix: newIndex(), migrated: changed}
+	sawHeader := false
+	for i, line := range lines {
+		if !sawHeader {
+			if err := json.Unmarshal(line, &s.header); err != nil {
+				return nil, errorf(CodeInvalidSession, err, "invalid session file %s", path)
+			}
+			sawHeader = true
+			continue
+		}
+		entry, err := UnmarshalEntry(line)
+		if err != nil {
+			if entry == nil {
+				return nil, errorf(CodeInvalidEntry, err, "invalid session file %s: line %d", path, i+1)
+			}
+			s.soft = append(s.soft, errorf(CodeInvalidEntry, err, "%s line %d", path, i+1))
+		}
+		s.ix.addLoaded(entry)
+	}
+	if !sawHeader {
+		return nil, errorf(CodeInvalidSession, nil, "invalid session file %s: missing session header", path)
+	}
+	return s, nil
+}
+
+func readJSONLines(path string) ([][]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -92,43 +168,56 @@ func OpenJSONL(path string) (*JSONLStorage, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	s := &JSONLStorage{path: path, ix: newIndex()}
 	scanner := bufio.NewScanner(f)
 	// Session lines carry whole messages, which can be large; raise the cap
 	// well past bufio's 64 KiB default.
 	scanner.Buffer(make([]byte, 0, 64*1024), 32*1024*1024)
 
-	lineNo := 0
-	sawHeader := false
+	var lines [][]byte
 	for scanner.Scan() {
-		lineNo++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
-		if !sawHeader {
-			if err := json.Unmarshal([]byte(line), &s.header); err != nil {
-				return nil, errorf(CodeInvalidSession, err, "invalid session file %s", path)
-			}
-			sawHeader = true
-			continue
-		}
-		entry, err := UnmarshalEntry([]byte(line))
-		if err != nil {
-			if entry == nil {
-				return nil, errorf(CodeInvalidEntry, err, "invalid session file %s: line %d", path, lineNo)
-			}
-			s.soft = append(s.soft, errorf(CodeInvalidEntry, err, "%s line %d", path, lineNo))
-		}
-		s.ix.addLoaded(entry)
+		lines = append(lines, []byte(line))
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, errorf(CodeStorage, err, "failed to read session %s", path)
 	}
-	if !sawHeader {
-		return nil, errorf(CodeInvalidSession, nil, "invalid session file %s: missing session header", path)
+	return lines, nil
+}
+
+// rewriteJSONL replaces a session file atomically. The append-only log is
+// rewritten exactly once in its life — when its format is upgraded — and a
+// half-written session would take the conversation with it.
+func rewriteJSONL(path string, lines [][]byte) error {
+	var buf bytes.Buffer
+	for _, line := range lines {
+		buf.Write(line)
+		buf.WriteByte('\n')
 	}
-	return s, nil
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".tau-session-*.jsonl")
+	if err != nil {
+		return errorf(CodeStorage, err, "failed to migrate session %s", path)
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+
+	if _, err := tmp.Write(buf.Bytes()); err != nil {
+		_ = tmp.Close()
+		return errorf(CodeStorage, err, "failed to migrate session %s", path)
+	}
+	if err := tmp.Close(); err != nil {
+		return errorf(CodeStorage, err, "failed to migrate session %s", path)
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return errorf(CodeStorage, err, "failed to migrate session %s", path)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return errorf(CodeStorage, err, "failed to migrate session %s", path)
+	}
+	return nil
 }
 
 // LoadJSONLMetadata reads only a session file's header.

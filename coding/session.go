@@ -474,12 +474,57 @@ func (s *Session) persistSink(ctx context.Context, ev agent.Event) error {
 	return nil
 }
 
-// Prompt runs one agent loop.
+// Prompt runs one agent loop, compacting around it if the context needs it.
+//
+// The check happens twice, because there are two ways to be over the window and
+// only one of them is visible in advance. Before the turn, the running estimate
+// says whether the conversation has outgrown its reserve. After it, a provider
+// that rejected the request for length says so in a way no estimate could have
+// predicted — a cache-heavy turn, an unusually long tool result — and that
+// rejection is recoverable exactly once.
 func (s *Session) Prompt(ctx context.Context, text string) ([]ai.Message, error) {
+	// A compaction that fails is reported through the warnings, not by
+	// refusing the turn: the provider's own answer is a better diagnosis than
+	// tau declining pre-emptively, and it may well succeed.
+	if _, err := s.MaybeCompact(ctx); err != nil {
+		s.Warnings = append(s.Warnings, "compaction failed: "+err.Error())
+	}
+
+	msg := ai.UserMessage{Content: ai.UserContent{Text: text}, Timestamp: nowMillis()}
+	out, err := s.Agent.Prompt(ctx, msg)
+	if err != nil || !s.overflowed(out) {
+		return out, err
+	}
+
+	// The turn was rejected for length. Compacting and retrying is the whole
+	// reason overflow is detected at all; if the compaction itself fails there
+	// is nothing further to try, so the original rejection is what the user
+	// should see.
+	compacted, cerr := s.Compact(ctx, "")
+	if cerr != nil || compacted == nil {
+		return out, err
+	}
 	return s.Agent.Prompt(ctx, ai.UserMessage{
 		Content:   ai.UserContent{Text: text},
 		Timestamp: nowMillis(),
 	})
+}
+
+// overflowed reports whether a turn ended because the request did not fit.
+func (s *Session) overflowed(messages []ai.Message) bool {
+	window := 0
+	if s.Model != nil {
+		window = s.Model.ContextWindow
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		switch m := messages[i].(type) {
+		case ai.AssistantMessage:
+			return ai.IsContextOverflow(&m, window)
+		case *ai.AssistantMessage:
+			return ai.IsContextOverflow(m, window)
+		}
+	}
+	return false
 }
 
 // FormatUsage renders a usage summary for a human.

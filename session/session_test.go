@@ -350,6 +350,7 @@ func TestBuildContextBranchSummaryProjection(t *testing.T) {
 	}
 	if found == nil {
 		t.Fatal("branch summary missing from context")
+		return
 	}
 	if found.Summary != "tried A, failed" {
 		t.Errorf("summary = %q", found.Summary)
@@ -592,7 +593,9 @@ func TestOpenJSONLRejectsBadHeader(t *testing.T) {
 	}{
 		{"empty file", "", CodeInvalidSession},
 		{"no header", `{"type":"message","id":"a","parentId":null,"timestamp":"t"}` + "\n", CodeInvalidSession},
-		{"old version", `{"type":"session","version":2,"id":"s","timestamp":"t","cwd":"/x"}` + "\n", CodeInvalidSession},
+		// An older version migrates; a newer one cannot, because this build
+		// does not know what the format grew.
+		{"future version", `{"type":"session","version":4,"id":"s","timestamp":"t","cwd":"/x"}` + "\n", CodeInvalidSession},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -663,9 +666,14 @@ func TestSetLeafIDRejectsUnknownEntry(t *testing.T) {
 // A session shaped like one Pi actually writes must load and project cleanly.
 func TestParsePiFixture(t *testing.T) {
 	ctx := context.Background()
-	storage, err := OpenJSONL(filepath.Join("testdata", "pi-session.jsonl"))
+	// Read-only, because opening a session for writing migrates it in place
+	// and this fixture is a checked-in file, not scratch space.
+	storage, err := OpenJSONLReadOnly(filepath.Join("testdata", "pi-session.jsonl"))
 	if err != nil {
 		t.Fatalf("failed to parse a Pi-shaped session: %v", err)
+	}
+	if storage.Migrated() {
+		t.Error("the Pi fixture should already be at the current version")
 	}
 	if errs := storage.SoftErrors(); len(errs) != 0 {
 		t.Errorf("unexpected soft errors: %v", errs)

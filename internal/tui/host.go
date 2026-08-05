@@ -131,6 +131,97 @@ func (h *host) ResumeSession(ctx context.Context) (string, error) {
 	return "Resumed " + h.cs.Path, nil
 }
 
+// NavigateTree opens the branch picker and moves to the choice.
+//
+// The offer is user messages, not every entry: a branch point is a request the
+// user made, and offering the assistant's replies as destinations would ask
+// them to pick a place in the middle of an answer.
+func (h *host) NavigateTree(ctx context.Context) (string, error) {
+	points, err := h.cs.UserPrompts(ctx)
+	if err != nil {
+		return "", err
+	}
+	if len(points) == 0 {
+		return "", errors.New("this session has no history to navigate")
+	}
+
+	opts := make([]extension.SelectOption, 0, len(points))
+	for _, p := range points {
+		opts = append(opts, extension.SelectOption{
+			Label: p.Text, Description: p.EntryID, Value: p.EntryID,
+		})
+	}
+	idx, err := h.bridge.Select(ctx, extension.SelectRequest{
+		Title:      "Go back to",
+		Message:    "The conversation continues from here. Later branches stay in the file.",
+		Options:    opts,
+		Initial:    len(opts) - 1,
+		Filterable: true,
+	})
+	if err != nil || idx < 0 {
+		return "", err
+	}
+
+	// Summarizing costs a request, so it is asked rather than assumed — unless
+	// settings already answered.
+	summarize := false
+	if h.cs.Settings == nil || !h.cs.Settings.BranchSummarySkipPrompt() {
+		choice, err := h.bridge.Select(ctx, extension.SelectRequest{
+			Title:   "Summarize the branch you are leaving?",
+			Message: "Costs one request. Without it, the abandoned work drops out of context.",
+			Options: []extension.SelectOption{
+				{Label: "Summarize it", Value: "yes"},
+				{Label: "Just move", Value: "no"},
+			},
+		})
+		if err != nil || choice < 0 {
+			return "", err
+		}
+		summarize = choice == 0
+	}
+
+	result, err := h.cs.MoveTo(ctx, opts[idx].Value, summarize)
+	if err != nil {
+		return "", err
+	}
+	if result != nil {
+		return "Moved back, and summarized the branch left behind.", nil
+	}
+	return "Moved back.", nil
+}
+
+// SelectForkPoint opens the fork picker and forks at the choice.
+func (h *host) SelectForkPoint(ctx context.Context) (string, error) {
+	points, err := h.cs.UserPrompts(ctx)
+	if err != nil {
+		return "", err
+	}
+	if len(points) == 0 {
+		return "", errors.New("this session has no user messages to fork from")
+	}
+
+	opts := make([]extension.SelectOption, 0, len(points))
+	for _, p := range points {
+		opts = append(opts, extension.SelectOption{
+			Label: p.Text, Description: p.EntryID, Value: p.EntryID,
+		})
+	}
+	idx, err := h.bridge.Select(ctx, extension.SelectRequest{
+		Title:      "Fork from",
+		Message:    "Copies this session up to just before the chosen message. The original is untouched.",
+		Options:    opts,
+		Initial:    len(opts) - 1,
+		Filterable: true,
+	})
+	if err != nil || idx < 0 {
+		return "", err
+	}
+	if err := h.cs.Fork(ctx, opts[idx].Value); err != nil {
+		return "", err
+	}
+	return "Forked to " + h.cs.Path, nil
+}
+
 // SetTrust records a project-trust decision, asking when none was given.
 func (h *host) SetTrust(ctx context.Context, args string) (string, error) {
 	decision := strings.TrimSpace(strings.ToLower(args))

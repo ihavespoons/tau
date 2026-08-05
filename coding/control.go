@@ -391,6 +391,78 @@ func (h codingHost) SetSessionName(name string) error {
 
 func (h codingHost) SessionInfo() string { return h.s.SessionSummary() }
 
+// Compact summarizes older history. Nothing to compact is reported as a
+// message rather than an error: /compact on a short session is a reasonable
+// thing to type, and the honest answer is that there is nothing to do.
+func (h codingHost) Compact(ctx context.Context, instructions string) (string, error) {
+	result, err := h.s.Compact(ctx, instructions)
+	if err != nil {
+		return "", err
+	}
+	if result == nil {
+		return "Nothing to compact yet — the conversation still fits.", nil
+	}
+	return fmt.Sprintf("Compacted %d tokens of history into a checkpoint.", result.TokensBefore), nil
+}
+
+func (h codingHost) SessionTree() string {
+	roots, err := h.s.TreeNodes(context.Background())
+	if err != nil {
+		return err.Error()
+	}
+	return RenderTree(context.Background(), h.s.Session, roots)
+}
+
+func (h codingHost) ForkPoints() string {
+	points, err := h.s.UserPrompts(context.Background())
+	if err != nil {
+		return err.Error()
+	}
+	if len(points) == 0 {
+		return "No user messages to fork from yet."
+	}
+	var b strings.Builder
+	for _, p := range points {
+		fmt.Fprintf(&b, "%s  %s\n", p.EntryID, truncateLine(p.Text, 68))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// MoveTo repositions the conversation, summarizing the branch left behind.
+//
+// The summary is on by default because the alternative loses the work
+// silently: the entries stay in the file, but nothing in the next request
+// mentions that the exploration happened. Settings can turn the prompt off.
+func (h codingHost) MoveTo(ctx context.Context, entryID string) (string, error) {
+	summarize := h.s.Settings == nil || !h.s.Settings.BranchSummarySkipPrompt()
+	result, err := h.s.MoveTo(ctx, entryID, summarize)
+	if err != nil {
+		return "", err
+	}
+	out := "Moved to " + entryID
+	if result != nil {
+		out += " (summarized the branch left behind)"
+	}
+	return out, nil
+}
+
+func (h codingHost) ForkSession(ctx context.Context, entryID string) (string, error) {
+	if err := h.s.Fork(ctx, entryID); err != nil {
+		return "", err
+	}
+	if entryID == "" {
+		return "Cloned this session to " + h.s.Path, nil
+	}
+	return "Forked to " + h.s.Path, nil
+}
+
+func truncateLine(s string, width int) string {
+	if len(s) <= width {
+		return s
+	}
+	return s[:width-1] + "…"
+}
+
 // hostWithUI adds the interactive command surface supplied by the host.
 type hostWithUI struct {
 	codingHost
@@ -433,3 +505,33 @@ func (s *Session) ToolsByName() map[string]agent.Tool {
 // ResolveModelSpec is a lookup that does not switch models, for previewing a
 // selection.
 func (s *Session) ResolveModelSpec(spec string) (models.Match, error) { return s.Models.Resolve(spec) }
+
+// SetLabel bookmarks the current position in the tree.
+//
+// A label is what makes a point in a long session findable again — the entry
+// ids are eight random characters, and nobody remembers which one was the
+// working state before the refactor.
+func (h codingHost) SetLabel(ctx context.Context, label string) (string, error) {
+	if h.s.Session == nil {
+		return "", ErrNoSession
+	}
+	leaf, err := h.s.Session.LeafID(ctx)
+	if err != nil {
+		return "", err
+	}
+	if leaf == nil {
+		return "", errors.New("this session has no history to label yet")
+	}
+
+	var value *string
+	if label != "" {
+		value = &label
+	}
+	if _, err := h.s.Session.AppendLabel(ctx, *leaf, value); err != nil {
+		return "", err
+	}
+	if label == "" {
+		return "Cleared the label on " + *leaf, nil
+	}
+	return "Labelled " + *leaf + " as " + label, nil
+}

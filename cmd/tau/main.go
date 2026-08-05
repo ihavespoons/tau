@@ -52,6 +52,8 @@ func run(args []string) error {
 			return listModels()
 		case "sessions":
 			return listSessions()
+		case "import":
+			return importCmd(args[1:])
 		}
 	}
 	return printMode(args)

@@ -23,17 +23,17 @@ const Version = 3
 
 // Entry type discriminators.
 const (
-	TypeMessage            = "message"
+	TypeMessage             = "message"
 	TypeThinkingLevelChange = "thinking_level_change"
-	TypeModelChange        = "model_change"
-	TypeActiveToolsChange  = "active_tools_change"
-	TypeCompaction         = "compaction"
-	TypeBranchSummary      = "branch_summary"
-	TypeCustom             = "custom"
-	TypeCustomMessage      = "custom_message"
-	TypeLabel              = "label"
-	TypeSessionInfo        = "session_info"
-	TypeLeaf               = "leaf"
+	TypeModelChange         = "model_change"
+	TypeActiveToolsChange   = "active_tools_change"
+	TypeCompaction          = "compaction"
+	TypeBranchSummary       = "branch_summary"
+	TypeCustom              = "custom"
+	TypeCustomMessage       = "custom_message"
+	TypeLabel               = "label"
+	TypeSessionInfo         = "session_info"
+	TypeLeaf                = "leaf"
 )
 
 // Timestamp renders t in the ISO-8601 form Pi writes (JS toISOString).
@@ -84,11 +84,11 @@ func (h Header) MarshalJSON() ([]byte, error) {
 // exactly 3, and id/timestamp/cwd must be present.
 func (h *Header) UnmarshalJSON(data []byte) error {
 	var probe struct {
-		Type          string          `json:"type"`
-		Version       *int            `json:"version"`
-		ID            string          `json:"id"`
-		Timestamp     string          `json:"timestamp"`
-		Cwd           string          `json:"cwd"`
+		Type          string           `json:"type"`
+		Version       *int             `json:"version"`
+		ID            string           `json:"id"`
+		Timestamp     string           `json:"timestamp"`
+		Cwd           string           `json:"cwd"`
 		ParentSession *json.RawMessage `json:"parentSession"`
 		Metadata      *json.RawMessage `json:"metadata"`
 	}

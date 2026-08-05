@@ -90,12 +90,17 @@ func TestRegistryLookupMissing(t *testing.T) {
 }
 
 type stubHost struct {
-	models  []string
-	current string
-	named   string
+	models    []string
+	current   string
+	named     string
+	compacted string
+	movedTo   string
+	forkedAt  string
+	forkCalls int
+	labelled  string
 }
 
-func (h *stubHost) Models() []string    { return h.models }
+func (h *stubHost) Models() []string     { return h.models }
 func (h *stubHost) CurrentModel() string { return h.current }
 func (h *stubHost) SetModel(id string) error {
 	for _, m := range h.models {
@@ -108,6 +113,26 @@ func (h *stubHost) SetModel(id string) error {
 }
 func (h *stubHost) SetSessionName(n string) error { h.named = n; return nil }
 func (h *stubHost) SessionInfo() string           { return "session info" }
+
+func (h *stubHost) Compact(_ context.Context, instructions string) (string, error) {
+	h.compacted = instructions
+	return "compacted", nil
+}
+func (h *stubHost) SessionTree() string { return "tree" }
+func (h *stubHost) SetLabel(_ context.Context, label string) (string, error) {
+	h.labelled = label
+	return "labelled", nil
+}
+func (h *stubHost) ForkPoints() string { return "fork points" }
+func (h *stubHost) MoveTo(_ context.Context, entryID string) (string, error) {
+	h.movedTo = entryID
+	return "moved", nil
+}
+func (h *stubHost) ForkSession(_ context.Context, entryID string) (string, error) {
+	h.forkedAt = entryID
+	h.forkCalls++
+	return "forked", nil
+}
 
 func TestRegisterBuiltinsCoversPiList(t *testing.T) {
 	r := NewRegistry()
@@ -276,5 +301,129 @@ func TestNewDefaultsToExtensionSource(t *testing.T) {
 	})
 	if c.Info().Source != SourceExtension {
 		t.Errorf("source = %q, want extension", c.Info().Source)
+	}
+}
+
+// /compact must work without a UI: a scripted run that outgrows its window
+// still needs a way to keep going.
+func TestCompactWorksHeadlessAndForwardsItsFocus(t *testing.T) {
+	host := &stubHost{}
+	r := NewRegistry()
+	RegisterBuiltins(r, host)
+
+	c, _ := r.Lookup("compact")
+	res, err := c.Run(context.Background(), "  keep the migration details  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Output != "compacted" {
+		t.Errorf("output = %q", res.Output)
+	}
+	if host.compacted != "keep the migration details" {
+		t.Errorf("instructions = %q, want them trimmed and passed through", host.compacted)
+	}
+}
+
+// With an id, /tree moves. Without one and headless, it prints — a scripted
+// session still needs to be able to see the shape of its own history.
+func TestTreeMovesWithAnIDAndPrintsWithout(t *testing.T) {
+	host := &stubHost{}
+	r := NewRegistry()
+	RegisterBuiltins(r, host)
+	c, _ := r.Lookup("tree")
+
+	if res, err := c.Run(context.Background(), "abc123"); err != nil || res.Output != "moved" {
+		t.Fatalf("res = %+v, err = %v", res, err)
+	}
+	if host.movedTo != "abc123" {
+		t.Errorf("moved to %q", host.movedTo)
+	}
+
+	res, err := c.Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Output != "tree" {
+		t.Errorf("output = %q, want the rendered tree", res.Output)
+	}
+}
+
+// A fork replaces the session, so the host has to be told to redraw everything
+// derived from it — otherwise the transcript on screen belongs to a file that
+// is no longer open.
+func TestForkAndCloneReportTheSessionChanged(t *testing.T) {
+	host := &stubHost{}
+	r := NewRegistry()
+	RegisterBuiltins(r, host)
+
+	fork, _ := r.Lookup("fork")
+	res, err := fork.Run(context.Background(), "abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.SessionChanged {
+		t.Error("a fork changes the session")
+	}
+	if host.forkedAt != "abc123" {
+		t.Errorf("forked at %q", host.forkedAt)
+	}
+
+	clone, _ := r.Lookup("clone")
+	res, err = clone.Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.SessionChanged {
+		t.Error("a clone changes the session")
+	}
+	// A clone is a fork of everything, which is the empty entry id.
+	if host.forkedAt != "" {
+		t.Errorf("clone forked at %q, want the whole session", host.forkedAt)
+	}
+	if host.forkCalls != 2 {
+		t.Errorf("fork calls = %d, want 2", host.forkCalls)
+	}
+}
+
+// Headless /fork with no argument has nothing to open a picker with, so it
+// lists the points rather than forking somewhere arbitrary.
+func TestHeadlessForkWithoutAnIDListsRatherThanForks(t *testing.T) {
+	host := &stubHost{}
+	r := NewRegistry()
+	RegisterBuiltins(r, host)
+
+	c, _ := r.Lookup("fork")
+	res, err := c.Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Output != "fork points" {
+		t.Errorf("output = %q", res.Output)
+	}
+	if host.forkCalls != 0 {
+		t.Error("nothing should have been forked")
+	}
+}
+
+// A label is how a point in a long session stays findable — the entry ids are
+// eight random characters. Setting one must not need a UI.
+func TestLabelSetsAndClears(t *testing.T) {
+	host := &stubHost{}
+	r := NewRegistry()
+	RegisterBuiltins(r, host)
+	c, _ := r.Lookup("label")
+
+	if _, err := c.Run(context.Background(), "  before the refactor  "); err != nil {
+		t.Fatal(err)
+	}
+	if host.labelled != "before the refactor" {
+		t.Errorf("label = %q, want it trimmed and passed through", host.labelled)
+	}
+
+	if _, err := c.Run(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if host.labelled != "" {
+		t.Errorf("an empty argument should clear the label, got %q", host.labelled)
 	}
 }
