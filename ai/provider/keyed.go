@@ -2,10 +2,12 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/ihavespoons/tau/ai"
 	"github.com/ihavespoons/tau/ai/api/anthropic"
+	"github.com/ihavespoons/tau/ai/api/bedrock"
 	"github.com/ihavespoons/tau/ai/api/googlegenai"
 	"github.com/ihavespoons/tau/ai/api/mistralconv"
 	"github.com/ihavespoons/tau/ai/api/openaichat"
@@ -56,7 +58,7 @@ func Keyed(store auth.CredentialStore, env auth.EnvContext, o KeyedOptions) *Pro
 		if opts == nil {
 			opts = &ai.SimpleStreamOptions{}
 		}
-		if err := apply(ctx, model, &opts.StreamOptions); err != nil {
+		if err := apply(ctx, model, &opts.StreamOptions); err != nil && !tolerateMissingKey(model, err) {
 			return errStream(model, err)
 		}
 		switch model.Api {
@@ -76,6 +78,8 @@ func Keyed(store auth.CredentialStore, env auth.EnvContext, o KeyedOptions) *Pro
 			return mistralconv.StreamSimple(ctx, model, c, opts)
 		case ai.ApiOpenAICodexResponses:
 			return openairesp.StreamSimpleCodex(ctx, model, c, opts)
+		case ai.ApiBedrockConverse:
+			return bedrock.StreamSimple(ctx, model, c, opts)
 		default:
 			return errStream(model, unsupportedWire(model))
 		}
@@ -85,7 +89,7 @@ func Keyed(store auth.CredentialStore, env auth.EnvContext, o KeyedOptions) *Pro
 		if opts == nil {
 			opts = &ai.StreamOptions{}
 		}
-		if err := apply(ctx, model, opts); err != nil {
+		if err := apply(ctx, model, opts); err != nil && !tolerateMissingKey(model, err) {
 			return errStream(model, err)
 		}
 		switch model.Api {
@@ -108,12 +112,35 @@ func Keyed(store auth.CredentialStore, env auth.EnvContext, o KeyedOptions) *Pro
 		case ai.ApiOpenAICodexResponses:
 			return openairesp.StreamCodex(ctx, model, c,
 				&openairesp.CodexOptions{Options: openairesp.Options{StreamOptions: *opts}})
+		case ai.ApiBedrockConverse:
+			return bedrock.Stream(ctx, model, c, &bedrock.Options{StreamOptions: *opts})
 		default:
 			return errStream(model, unsupportedWire(model))
 		}
 	}
 
 	return p
+}
+
+// tolerateMissingKey reports whether a wire can proceed without a key tau
+// resolved for it.
+//
+// Bedrock authenticates through the AWS credential chain — shared config, SSO,
+// an instance role — and Vertex falls back to Application Default Credentials.
+// Neither has an API key in the environment table, so refusing the request here
+// would reject the exact setup those providers document. Only the
+// nothing-was-found case is tolerated: a credential that exists and fails still
+// surfaces, because falling back silently would turn an expired token into a
+// confusing permissions error from a different auth path.
+func tolerateMissingKey(model *ai.Model, err error) bool {
+	if !errors.Is(err, auth.ErrNoCredentials) {
+		return false
+	}
+	switch model.Api {
+	case ai.ApiBedrockConverse, ai.ApiGoogleVertex:
+		return true
+	}
+	return false
 }
 
 // unsupportedWire names the model and the wire, because "not supported" alone
@@ -145,7 +172,7 @@ func StreamableWire(api ai.Api) bool {
 	case ai.ApiOpenAICompletions, ai.ApiAnthropicMessages,
 		ai.ApiOpenAIResponses, ai.ApiAzureOpenAIResponses,
 		ai.ApiGoogleGenerativeAI, ai.ApiGoogleVertex, ai.ApiMistralConversations,
-		ai.ApiOpenAICodexResponses:
+		ai.ApiOpenAICodexResponses, ai.ApiBedrockConverse:
 		return true
 	}
 	return false

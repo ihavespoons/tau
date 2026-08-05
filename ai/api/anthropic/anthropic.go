@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ihavespoons/tau/ai"
+	"github.com/ihavespoons/tau/ai/api/apishared"
 )
 
 // Stealth mode: mimic Claude Code's tool naming and identity exactly.
@@ -224,7 +225,7 @@ func StreamSimple(ctx context.Context, model *ai.Model, c ai.Context, opts *ai.S
 		opts = &ai.SimpleStreamOptions{}
 	}
 	base := opts.StreamOptions
-	base.MaxTokens = clampMaxTokensToContext(model, c, orDefault(opts.MaxTokens, model.MaxTokens))
+	base.MaxTokens = apishared.ClampMaxTokensToContext(model, c, orDefault(opts.MaxTokens, model.MaxTokens))
 
 	if err := assertRequestAuth(model.Provider, opts.APIKey, opts.Headers); err != nil {
 		return failedStream(model, err)
@@ -244,14 +245,14 @@ func StreamSimple(ctx context.Context, model *ai.Model, c ai.Context, opts *ai.S
 		})
 	}
 
-	maxTokens, thinkingBudget := adjustMaxTokensForThinking(opts.MaxTokens, model.MaxTokens, opts.Reasoning, opts.ThinkingBudgets)
-	maxTokens = clampMaxTokensToContext(model, c, maxTokens)
+	maxTokens, thinkingBudget := apishared.AdjustMaxTokensForThinking(opts.MaxTokens, model.MaxTokens, opts.Reasoning, opts.ThinkingBudgets)
+	maxTokens = apishared.ClampMaxTokensToContext(model, c, maxTokens)
 	base.MaxTokens = maxTokens
 	tr := true
 	return Stream(ctx, model, c, &Options{
 		StreamOptions:        base,
 		ThinkingEnabled:      &tr,
-		ThinkingBudgetTokens: minInt(thinkingBudget, maxInt(0, maxTokens-1024)),
+		ThinkingBudgetTokens: min(thinkingBudget, max(0, maxTokens-1024)),
 	})
 }
 

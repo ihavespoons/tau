@@ -93,7 +93,7 @@ func TestKeyedNamesAnUnimplementedWire(t *testing.T) {
 	url, _ := wireProbe(t)
 	// A wire tau genuinely has not built. Using one it HAS built would make
 	// this test reach the real provider.
-	m := model("future-model", ai.ApiBedrockConverse, url)
+	m := model("future-model", ai.ApiPiMessages, url)
 	p := Keyed(auth.NewMemStore(), auth.MapContext{}, KeyedOptions{
 		ID: "probe", BaseURL: url, Models: []ai.Model{m},
 	})
@@ -102,7 +102,7 @@ func TestKeyedNamesAnUnimplementedWire(t *testing.T) {
 	if msg.StopReason != ai.StopError {
 		t.Fatalf("stop reason: %q", msg.StopReason)
 	}
-	for _, want := range []string{"future-model", "bedrock-converse-stream"} {
+	for _, want := range []string{"future-model", "pi-messages"} {
 		if !strings.Contains(msg.ErrorMessage, want) {
 			t.Errorf("error should mention %q: %q", want, msg.ErrorMessage)
 		}

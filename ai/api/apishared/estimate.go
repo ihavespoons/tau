@@ -1,8 +1,12 @@
-package anthropic
+package apishared
 
-// Port of Pi's utils/estimate.ts (subset used by simple-options) and
-// api/simple-options.ts. Slated for extraction to a shared internal package
-// when the next wire API lands.
+// Port of Pi's utils/estimate.ts (the subset simple-options needs) and
+// api/simple-options.ts.
+//
+// These lived in the anthropic package until Bedrock needed them too. Bedrock
+// runs Claude, so it wants the identical budget arithmetic — and two copies of
+// "how many tokens may this turn spend thinking" would drift into two different
+// answers for the same model.
 
 import (
 	"encoding/json"
@@ -72,9 +76,9 @@ func estimateMessageTokens(msg ai.Message) int {
 	}
 }
 
-// estimateContextTokens ports Pi's estimateContextTokens for a full Context:
+// EstimateContextTokens ports Pi's estimateContextTokens for a full Context:
 // anchored on the most recent applicable assistant usage when available.
-func estimateContextTokens(c ai.Context) int {
+func EstimateContextTokens(c ai.Context) int {
 	lastUsageIndex := -1
 	var lastUsage ai.Usage
 	latestPrefixTimestamp := int64(-1 << 62)
@@ -151,26 +155,26 @@ func messageTimestamp(msg ai.Message) int64 {
 	}
 }
 
-// clampMaxTokensToContext ports simple-options.ts.
-func clampMaxTokensToContext(model *ai.Model, c ai.Context, maxTokens int) int {
+// ClampMaxTokensToContext ports simple-options.ts.
+func ClampMaxTokensToContext(model *ai.Model, c ai.Context, maxTokens int) int {
 	if model.ContextWindow <= 0 {
-		return maxInt(minMaxTokens, maxTokens)
+		return max(minMaxTokens, maxTokens)
 	}
-	available := model.ContextWindow - estimateContextTokens(c) - contextSafetyTokens
-	return minInt(maxTokens, maxInt(minMaxTokens, available))
+	available := model.ContextWindow - EstimateContextTokens(c) - contextSafetyTokens
+	return min(maxTokens, max(minMaxTokens, available))
 }
 
-// clampReasoning maps xhigh/max down to high for budget-based thinking.
-func clampReasoning(level ai.ThinkingLevel) ai.ThinkingLevel {
+// ClampReasoning maps xhigh/max down to high for budget-based thinking.
+func ClampReasoning(level ai.ThinkingLevel) ai.ThinkingLevel {
 	if level == ai.ThinkingXHigh || level == ai.ThinkingMax {
 		return ai.ThinkingHigh
 	}
 	return level
 }
 
-// adjustMaxTokensForThinking ports simple-options.ts: fits a thinking budget
+// AdjustMaxTokensForThinking ports simple-options.ts: fits a thinking budget
 // inside the output cap. baseMaxTokens == 0 means "no explicit caller cap".
-func adjustMaxTokensForThinking(baseMaxTokens, modelMaxTokens int, level ai.ThinkingLevel, budgets *ai.ThinkingBudgets) (maxTokens, thinkingBudget int) {
+func AdjustMaxTokensForThinking(baseMaxTokens, modelMaxTokens int, level ai.ThinkingLevel, budgets *ai.ThinkingBudgets) (maxTokens, thinkingBudget int) {
 	defaults := map[ai.ThinkingLevel]int{
 		ai.ThinkingMinimal: 1024,
 		ai.ThinkingLow:     2048,
@@ -192,28 +196,14 @@ func adjustMaxTokensForThinking(baseMaxTokens, modelMaxTokens int, level ai.Thin
 		}
 	}
 	const minOutputTokens = 1024
-	thinkingBudget = defaults[clampReasoning(level)]
+	thinkingBudget = defaults[ClampReasoning(level)]
 	if baseMaxTokens == 0 {
 		maxTokens = modelMaxTokens
 	} else {
-		maxTokens = minInt(baseMaxTokens+thinkingBudget, modelMaxTokens)
+		maxTokens = min(baseMaxTokens+thinkingBudget, modelMaxTokens)
 	}
 	if maxTokens <= thinkingBudget {
-		thinkingBudget = maxInt(0, maxTokens-minOutputTokens)
+		thinkingBudget = max(0, maxTokens-minOutputTokens)
 	}
 	return maxTokens, thinkingBudget
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

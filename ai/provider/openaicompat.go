@@ -104,6 +104,7 @@ func keyResolver(store auth.CredentialStore, env auth.EnvContext, id, name strin
 			return &auth.Error{
 				Code:    auth.CodeAuth,
 				Message: "no credentials for " + id + ": " + hint,
+				Cause:   auth.ErrNoCredentials,
 			}
 		}
 		opts.APIKey = res.Auth.APIKey

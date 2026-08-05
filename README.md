@@ -68,11 +68,11 @@ Pi's own, so the per-model quirks come along with it: which thinking levels a
 model accepts, which token field it wants, where its pricing tier changes,
 whether it needs cache markers, which wire it actually speaks.
 
-Not every wire is implemented yet — a model on one tau cannot talk to is
+Nine wire APIs are live: Anthropic messages, OpenAI chat-completions, OpenAI
+responses, Azure OpenAI, Gemini, Vertex AI, Mistral, Bedrock ConverseStream,
+and the ChatGPT Codex backend — between them, every provider in the catalog
+except Pi's own server protocol. A model on a wire tau cannot talk to is still
 listed and selectable, and says so by name rather than pretending not to exist.
-Live today: Anthropic messages, OpenAI chat-completions, OpenAI responses,
-Azure OpenAI, Gemini, Vertex AI, Mistral, and the ChatGPT Codex backend —
-between them, nearly the whole catalog. Still to come: Bedrock.
 
 Three providers have a login rather than a key:
 
@@ -82,10 +82,12 @@ tau login github-copilot     # device flow
 tau login openai-codex       # ChatGPT subscription
 ```
 
-Vertex authenticates with Application Default Credentials, so
-`gcloud auth application-default login` is enough; set `GOOGLE_CLOUD_PROJECT`
-and `GOOGLE_CLOUD_LOCATION`. Everything else takes an API key from the
-environment.
+Two authenticate from the ambient cloud environment instead. Vertex uses
+Application Default Credentials, so `gcloud auth application-default login` is
+enough; set `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. Bedrock uses the
+standard AWS chain — `AWS_PROFILE`, environment keys, SSO, or an instance role —
+and honours `AWS_REGION`, inference-profile ARNs, and `AWS_BEARER_TOKEN_BEDROCK`
+for Bedrock API keys. Everything else takes an API key from the environment.
 
 Anything not listed that speaks `/v1/chat/completions` — vLLM, llama.cpp,
 LiteLLM, Ollama, a private gateway — can be declared in

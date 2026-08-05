@@ -15,6 +15,16 @@ const (
 	CodeOAuth ErrorCode = "oauth"
 )
 
+// ErrNoCredentials reports that nothing supplied a credential for a provider:
+// no key in the environment, none in models.json, and no completed login.
+//
+// It is distinguished from other auth failures because a few wires can still
+// proceed — Bedrock resolves AWS credentials itself, and Vertex falls back to
+// Application Default Credentials — and turning "tau found no key" into a hard
+// failure would lock those users out of providers that were configured
+// correctly all along.
+var ErrNoCredentials = errors.New("no credentials")
+
 // Error is an auth resolution failure.
 type Error struct {
 	Code    ErrorCode
