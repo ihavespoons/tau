@@ -79,7 +79,7 @@ func printMode(args []string) error {
 		cont      = fs.Bool("continue", false, "continue the most recent session for this directory")
 		sessPath  = fs.String("session", "", "resume a specific session file")
 		verbose   = fs.Bool("verbose", false, "show tool calls and usage")
-		mode      = fs.String("mode", "text", "output mode: text|json")
+		mode      = fs.String("mode", "text", "output mode: text|json|rpc")
 		approve   = fs.Bool("approve", false, "trust this project's .tau resources")
 		noApprove = fs.Bool("no-approve", false, "do not trust this project's .tau resources")
 		exts      repeatedFlag
@@ -96,6 +96,7 @@ usage:
   tau -p "prompt"        run the agent (non-interactive)
   tau -p -c "prompt"     continue the most recent session here
   tau -e ./my-ext.ts     load an extension (repeatable)
+  tau --mode rpc         drive tau over JSONL on stdin/stdout
   tau login [provider]   log in (default: anthropic; an unknown name lists the rest)
   tau login -k           store an API key instead
   tau logout [provider]  remove stored credentials
@@ -113,7 +114,11 @@ flags:
 
 	prompt := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	piped := false
-	if prompt == "" {
+	// rpc mode owns stdin for the whole run, so it must not be drained here.
+	// Reading it to EOF looking for a piped prompt would block forever against
+	// a client that is holding the pipe open to send commands — which is every
+	// client.
+	if prompt == "" && *mode != "rpc" {
 		stat, _ := os.Stdin.Stat()
 		if stat != nil && stat.Mode()&os.ModeCharDevice == 0 {
 			piped = true
@@ -134,6 +139,26 @@ flags:
 	} else if *noApprove {
 		no := false
 		trustOverride = &no
+	}
+
+	// rpc is driven entirely from stdin, so it is the one mode that starts
+	// with no prompt and is still not interactive.
+	if *mode == "rpc" {
+		loader := newSubprocessLoader(exts)
+		return runRPCMode(ctx, coding.Options{
+			ModelID:       *modelID,
+			ThinkingLevel: ai.ModelThinkingLevel(*thinking),
+			SystemPrompt:  *system,
+			NoTools:       *noTools,
+			NoSession:     *noSession,
+			Resume:        *cont,
+			SessionPath:   *sessPath,
+			Mode:          extension.ModeRPC,
+			TrustOverride: trustOverride,
+			Extensions:    bundledExtensions(),
+
+			ExternalExtensions: loader,
+		}, loader, prompt)
 	}
 
 	// No prompt and a real terminal means interactive: that is the default way

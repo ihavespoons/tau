@@ -23,6 +23,15 @@ type subprocessLoader struct {
 	// diagnostics collects load failures and extension warnings so the host
 	// can show them once the session is up.
 	diagnostics []string
+	// onLog forwards an extension's diagnostics somewhere a caller can see
+	// them. Nil sends them to stderr, which is right for a terminal and wrong
+	// for a program driving tau over a pipe.
+	onLog func(name, level, message string)
+}
+
+// SetLogSink routes extension log frames to fn instead of stderr.
+func (l *subprocessLoader) SetLogSink(fn func(name, level, message string)) {
+	l.onLog = fn
 }
 
 func newSubprocessLoader(flags []string) *subprocessLoader {
@@ -33,6 +42,13 @@ func newSubprocessLoader(flags []string) *subprocessLoader {
 		// through would corrupt the transcript, so it goes where a redirect
 		// can catch it.
 		Stderr: os.Stderr,
+		OnLog: func(level, msg string) {
+			if l.onLog != nil {
+				l.onLog("extension", level, msg)
+				return
+			}
+			fmt.Fprintf(os.Stderr, "tau: extension [%s] %s\n", level, msg)
+		},
 		OnWarning: func(name, msg string) {
 			l.diagnostics = append(l.diagnostics, fmt.Sprintf("extension %s: %s", name, msg))
 		},
