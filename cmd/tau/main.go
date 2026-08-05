@@ -16,6 +16,7 @@ import (
 	"github.com/ihavespoons/tau/ai"
 	"github.com/ihavespoons/tau/ai/auth"
 	"github.com/ihavespoons/tau/ai/auth/oauth"
+	prov "github.com/ihavespoons/tau/ai/provider"
 	"github.com/ihavespoons/tau/coding"
 	"github.com/ihavespoons/tau/config"
 	"github.com/ihavespoons/tau/extension"
@@ -390,6 +391,13 @@ var loginFlows = map[string]func() auth.OAuthAuth{
 	"openrouter":     func() auth.OAuthAuth { return oauth.NewOpenRouter() },
 	"kimi-coding":    func() auth.OAuthAuth { return oauth.NewKimi() },
 	"xai":            func() auth.OAuthAuth { return oauth.NewXAI() },
+	"radius": func() auth.OAuthAuth {
+		gateway := config.RadiusGateway()
+		if gateway == "" {
+			gateway = prov.DefaultRadiusGateway
+		}
+		return oauth.NewRadius("Radius", gateway)
+	},
 }
 
 func loginProviders() []string {
@@ -403,13 +411,13 @@ func loginProviders() []string {
 
 func login(args []string) error {
 	useKey := false
-	provider := "anthropic"
+	providerID := "anthropic"
 	for _, arg := range args {
 		switch {
 		case arg == "--api-key" || arg == "-k":
 			useKey = true
 		case !strings.HasPrefix(arg, "-"):
-			provider = arg
+			providerID = arg
 		}
 	}
 
@@ -421,7 +429,7 @@ func login(args []string) error {
 
 	if useKey {
 		key, err := in.Prompt(ctx, auth.Prompt{
-			Type: auth.PromptSecret, Message: "Paste your " + provider + " API key:",
+			Type: auth.PromptSecret, Message: "Paste your " + providerID + " API key:",
 		})
 		if err != nil {
 			return err
@@ -429,7 +437,7 @@ func login(args []string) error {
 		if key == "" {
 			return errors.New("no key entered")
 		}
-		if _, err := s.Modify(ctx, provider, func(*auth.Credential) (*auth.Credential, error) {
+		if _, err := s.Modify(ctx, providerID, func(*auth.Credential) (*auth.Credential, error) {
 			return &auth.Credential{Type: auth.CredentialAPIKey, Key: key}, nil
 		}); err != nil {
 			return err
@@ -438,17 +446,40 @@ func login(args []string) error {
 		return nil
 	}
 
-	flow, ok := loginFlows[provider]
+	flow, ok := loginFlows[providerID]
 	if !ok {
 		return fmt.Errorf("no login flow for %q — tau can log in to: %s\n"+
 			"every other provider takes an API key from the environment",
-			provider, strings.Join(loginProviders(), ", "))
+			providerID, strings.Join(loginProviders(), ", "))
 	}
-	if err := oauth.Login(ctx, flow(), s, provider, in); err != nil {
+	if err := oauth.Login(ctx, flow(), s, providerID, in); err != nil {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, "Logged in. Credentials saved to "+config.AuthPath())
+
+	if providerID == prov.RadiusProviderID {
+		refreshRadius(ctx, s)
+	}
 	return nil
+}
+
+// refreshRadius fetches the gateway's catalog after a login.
+//
+// A failure here is reported but does not fail the login: the credential is
+// good and saved, and the only consequence is an empty model list that the next
+// login or refresh fills in. Returning an error would suggest the sign-in
+// itself had not worked.
+func refreshRadius(ctx context.Context, s auth.CredentialStore) {
+	catalog, err := coding.RefreshRadiusCatalog(ctx, s)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "warning: could not load the Radius model catalog: "+err.Error())
+		return
+	}
+	msg := fmt.Sprintf("Loaded %d Radius models.", len(catalog.Models))
+	if catalog.Skipped > 0 {
+		msg += fmt.Sprintf(" %d entries were skipped as incomplete.", catalog.Skipped)
+	}
+	fmt.Fprintln(os.Stderr, msg)
 }
 
 // runJSONMode streams the run as JSONL on stdout, one event per line, so tau

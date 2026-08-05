@@ -113,9 +113,8 @@ func builtinOAuth(id string) auth.OAuthAuth {
 	case "xai":
 		return oauth.NewXAI()
 	}
-	// Radius is implemented (ai/auth/oauth/radius.go) but deliberately not
-	// listed: it is a pi-messages provider with a catalog fetched from the
-	// gateway, and tau has neither. Offering the login would let a user
-	// authenticate to a provider whose models they still could not reach.
+	// Radius is absent because it is not built from the compiled catalog at
+	// all: it has no static model list, so it is assembled by Radius() from
+	// whatever the gateway last published, and carries its own login.
 	return nil
 }

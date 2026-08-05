@@ -68,14 +68,13 @@ Pi's own, so the per-model quirks come along with it: which thinking levels a
 model accepts, which token field it wants, where its pricing tier changes,
 whether it needs cache markers, which wire it actually speaks.
 
-Nine wire APIs are live: Anthropic messages, OpenAI chat-completions, OpenAI
-responses, Azure OpenAI, Gemini, Vertex AI, Mistral, Bedrock ConverseStream,
-and the ChatGPT Codex backend — between them, every provider in the catalog
-except Pi's own server protocol. A model on a wire tau cannot talk to is still
-listed and selectable, and says so by name rather than pretending not to exist.
+All ten wire APIs are live: Anthropic messages, OpenAI chat-completions, OpenAI
+responses, Azure OpenAI, Gemini, Vertex AI, Mistral, Bedrock ConverseStream, the
+ChatGPT Codex backend, and pi-messages — Pi's own protocol. Every provider in
+the catalog is reachable.
 
-Six providers have a login rather than a key, so a subscription you already pay
-for works without one:
+Seven providers have a login rather than a key, so a subscription you already
+pay for works without one:
 
 ```sh
 tau login                    # Anthropic — Claude Pro/Max
@@ -84,7 +83,14 @@ tau login openai-codex       # ChatGPT subscription
 tau login openrouter         # browser; yields a permanent API key
 tau login xai                # device flow — SuperGrok or X Premium
 tau login kimi-coding        # device flow
+tau login radius             # browser or device code
 ```
+
+Radius is a gateway rather than a vendor, and it publishes no fixed model list:
+which models you can reach is a property of your account. Logging in fetches the
+catalog and caches it in `~/.tau/agent/models-store.json`, so it is there on the
+next start without a network round trip; logging in again refreshes it. Point
+tau at your own deployment with `TAU_RADIUS_GATEWAY`.
 
 Two authenticate from the ambient cloud environment instead. Vertex uses
 Application Default Credentials, so `gcloud auth application-default login` is
@@ -124,7 +130,8 @@ LiteLLM, Ollama, a private gateway — can be declared in
 Then `tau --model openrouter/anthropic/claude-sonnet-4.5`, or set
 `defaultModel` in settings. Omitting `api` assumes `openai-completions`, which
 is what nearly every endpoint speaks; the per-provider quirks are detected from
-the provider id and base URL.
+the provider id and base URL. Any of the ten wires can be named instead —
+`"api": "pi-messages"` reaches a backend speaking Pi's own protocol.
 
 Qualify a model with its provider — `anthropic/claude-sonnet-5`, not
 `claude-sonnet-5`. A bare id is matched loosely across the whole catalog, and a

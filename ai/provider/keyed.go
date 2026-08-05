@@ -12,6 +12,7 @@ import (
 	"github.com/ihavespoons/tau/ai/api/mistralconv"
 	"github.com/ihavespoons/tau/ai/api/openaichat"
 	"github.com/ihavespoons/tau/ai/api/openairesp"
+	"github.com/ihavespoons/tau/ai/api/pimessages"
 	"github.com/ihavespoons/tau/ai/auth"
 )
 
@@ -80,6 +81,8 @@ func Keyed(store auth.CredentialStore, env auth.EnvContext, o KeyedOptions) *Pro
 			return openairesp.StreamSimpleCodex(ctx, model, c, opts)
 		case ai.ApiBedrockConverse:
 			return bedrock.StreamSimple(ctx, model, c, opts)
+		case ai.ApiPiMessages:
+			return pimessages.StreamSimple(ctx, model, c, opts)
 		default:
 			return errStream(model, unsupportedWire(model))
 		}
@@ -114,6 +117,8 @@ func Keyed(store auth.CredentialStore, env auth.EnvContext, o KeyedOptions) *Pro
 				&openairesp.CodexOptions{Options: openairesp.Options{StreamOptions: *opts}})
 		case ai.ApiBedrockConverse:
 			return bedrock.Stream(ctx, model, c, &bedrock.Options{StreamOptions: *opts})
+		case ai.ApiPiMessages:
+			return pimessages.Stream(ctx, model, c, &pimessages.Options{StreamOptions: *opts})
 		default:
 			return errStream(model, unsupportedWire(model))
 		}
@@ -167,12 +172,16 @@ func dominantApi(models []ai.Model) ai.Api {
 }
 
 // StreamableWires reports whether tau can talk to a model's wire at all.
+//
+// Every wire in the catalog is now implemented. The check stays because
+// models.json can name any api string it likes, and a typo there should say so
+// rather than silently produce a provider that cannot stream.
 func StreamableWire(api ai.Api) bool {
 	switch api {
 	case ai.ApiOpenAICompletions, ai.ApiAnthropicMessages,
 		ai.ApiOpenAIResponses, ai.ApiAzureOpenAIResponses,
 		ai.ApiGoogleGenerativeAI, ai.ApiGoogleVertex, ai.ApiMistralConversations,
-		ai.ApiOpenAICodexResponses, ai.ApiBedrockConverse:
+		ai.ApiOpenAICodexResponses, ai.ApiBedrockConverse, ai.ApiPiMessages:
 		return true
 	}
 	return false

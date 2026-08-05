@@ -87,13 +87,15 @@ func TestKeyedDispatchesOnTheModelsWire(t *testing.T) {
 	}
 }
 
-// A wire tau has not built yet must name itself. "Not supported" alone leaves
-// the user guessing whether the problem is the model, the key, or tau.
+// A wire tau cannot speak must name itself. "Not supported" alone leaves the
+// user guessing whether the problem is the model, the key, or tau.
+//
+// Every wire in the compiled catalog is now implemented, so the case this
+// covers is a models.json provider declaring an api tau has never heard of —
+// which is what a typo in that file produces.
 func TestKeyedNamesAnUnimplementedWire(t *testing.T) {
 	url, _ := wireProbe(t)
-	// A wire tau genuinely has not built. Using one it HAS built would make
-	// this test reach the real provider.
-	m := model("future-model", ai.ApiPiMessages, url)
+	m := model("future-model", "telepathy-v2", url)
 	p := Keyed(auth.NewMemStore(), auth.MapContext{}, KeyedOptions{
 		ID: "probe", BaseURL: url, Models: []ai.Model{m},
 	})
@@ -102,10 +104,39 @@ func TestKeyedNamesAnUnimplementedWire(t *testing.T) {
 	if msg.StopReason != ai.StopError {
 		t.Fatalf("stop reason: %q", msg.StopReason)
 	}
-	for _, want := range []string{"future-model", "pi-messages"} {
+	for _, want := range []string{"future-model", "telepathy-v2"} {
 		if !strings.Contains(msg.ErrorMessage, want) {
 			t.Errorf("error should mention %q: %q", want, msg.ErrorMessage)
 		}
+	}
+}
+
+// THE POINT: pi-messages is reachable through the same dispatch as every other
+// wire. It arrived last, and a wire that is implemented but not routed fails
+// exactly like one that was never written.
+func TestKeyedRoutesPiMessages(t *testing.T) {
+	var seen string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.URL.Path
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"type":"done","reason":"stop"}` + "\n\n"))
+	}))
+	defer srv.Close()
+
+	p := Keyed(auth.NewMemStore(), auth.MapContext{}, KeyedOptions{
+		ID: "probe", BaseURL: srv.URL,
+		Models: []ai.Model{model("gateway-model", ai.ApiPiMessages, srv.URL)},
+	})
+
+	msg := drain(t, p, p.Model("gateway-model"))
+	if msg.StopReason != ai.StopStop {
+		t.Fatalf("stream failed: %s", msg.ErrorMessage)
+	}
+	if !strings.HasSuffix(seen, "/messages") {
+		t.Errorf("routed to %q", seen)
+	}
+	if !StreamableWire(ai.ApiPiMessages) {
+		t.Error("pi-messages must report as streamable, or models on it are listed as unreachable")
 	}
 }
 

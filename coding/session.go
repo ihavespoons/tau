@@ -337,6 +337,7 @@ func loadSettings(cwd string, trusted bool) (*settings.Resolved, error) {
 // warning rather than printed, so the caller decides where it surfaces.
 func BuildRegistry(store auth.CredentialStore) (*models.Registry, []string, error) {
 	builtins := provider.Builtins(store, auth.OSContext{})
+	builtins = append(builtins, radiusProvider(store))
 
 	var warnings []string
 	cfg, err := models.LoadConfig(config.ModelsPath())
@@ -351,6 +352,53 @@ func BuildRegistry(store auth.CredentialStore) (*models.Registry, []string, erro
 		Store: store, Env: auth.OSContext{},
 	})
 	return reg, warnings, err
+}
+
+// radiusProvider builds the Radius gateway provider from its cached catalog.
+//
+// Radius publishes no static model list — what a user can reach is a property
+// of their account — so tau carries whatever the last successful fetch found
+// and RefreshRadiusCatalog updates it. Before the first login the provider
+// exists with an empty catalog, which is honest: `tau models` shows the
+// provider, and there is nothing under it until you sign in.
+func radiusProvider(store auth.CredentialStore) *provider.Provider {
+	opts := provider.RadiusOptions{Gateway: config.RadiusGateway()}
+	if entry := models.NewCatalogStore(config.ModelsStorePath()).Read(provider.RadiusProviderID); entry != nil {
+		opts.Models = entry.Models
+	}
+	return provider.Radius(store, auth.OSContext{}, opts)
+}
+
+// RefreshRadiusCatalog fetches the gateway's model list and caches it.
+//
+// It runs after a login rather than at startup: it is a network round trip, and
+// making every `tau` invocation wait on a gateway would slow down sessions that
+// have nothing to do with Radius. The moment a user signs in is when they are
+// online, waiting, and expecting setup to happen.
+func RefreshRadiusCatalog(ctx context.Context, store auth.CredentialStore) (*provider.RadiusCatalog, error) {
+	opts := provider.RadiusOptions{Gateway: config.RadiusGateway()}
+
+	// The token is what makes the catalog the user's own; without one the
+	// gateway may still publish a public list, so a missing credential is not
+	// a reason to skip the fetch.
+	apiKey := ""
+	if cred, err := store.Read(ctx, provider.RadiusProviderID); err == nil && cred != nil {
+		if cred.OAuth != nil {
+			apiKey = cred.OAuth.Access
+		} else {
+			apiKey = cred.Key
+		}
+	}
+
+	catalog, err := provider.FetchRadiusCatalog(ctx, opts, apiKey)
+	if err != nil {
+		return nil, err
+	}
+	if err := models.NewCatalogStore(config.ModelsStorePath()).
+		Write(ctx, provider.RadiusProviderID, catalog.Models); err != nil {
+		return catalog, err
+	}
+	return catalog, nil
 }
 
 // resolveModel picks the model and thinking level for the run: explicit

@@ -12,6 +12,11 @@ import (
 const (
 	EnvAgentDir   = "TAU_AGENT_DIR"
 	EnvSessionDir = "TAU_SESSION_DIR"
+	// EnvRadiusGateway points Radius at a deployment other than the default.
+	// PI_RADIUS_URL is accepted too, because a user migrating from Pi has
+	// already set it for a self-hosted gateway.
+	EnvRadiusGateway   = "TAU_RADIUS_GATEWAY"
+	EnvPiRadiusGateway = "PI_RADIUS_URL"
 )
 
 // DirName is the config directory name used both globally (~/.tau) and
@@ -38,6 +43,19 @@ func AuthPath() string { return filepath.Join(AgentDir(), "auth.json") }
 
 // ModelsPath is the custom provider/model overlay file.
 func ModelsPath() string { return filepath.Join(AgentDir(), "models.json") }
+
+// ModelsStorePath caches the catalogs of providers that publish theirs over the
+// network instead of shipping a static list. It is written by tau, not by hand
+// — models.json is the file the user edits.
+func ModelsStorePath() string { return filepath.Join(AgentDir(), "models-store.json") }
+
+// RadiusGateway is the Radius deployment to talk to; empty means the default.
+func RadiusGateway() string {
+	if v := os.Getenv(EnvRadiusGateway); v != "" {
+		return v
+	}
+	return os.Getenv(EnvPiRadiusGateway)
+}
 
 // SessionsDir is the root of session storage.
 func SessionsDir() string {
