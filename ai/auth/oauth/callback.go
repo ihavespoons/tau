@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -17,6 +18,9 @@ import (
 type callbackResult struct {
 	Code  string
 	State string
+	// Err reports a failure the browser already saw, so the terminal can say
+	// the same thing rather than timing out on a login that is already over.
+	Err error
 }
 
 type callbackServer struct {
@@ -29,14 +33,24 @@ type callbackServer struct {
 
 // callbackConfig describes one provider's redirect endpoint.
 //
-// The port and path are not tau's choice: they are registered with the
-// provider as part of the redirect URI, so a login fails outright if the
-// server listens anywhere else.
+// For most providers the port and path are not tau's choice: they are
+// registered with the provider as part of the redirect URI, so a login fails
+// outright if the server listens anywhere else. OpenRouter is the exception —
+// it takes the callback URL as a request parameter, so the port is ephemeral
+// and the path is a fresh random value each login.
 type callbackConfig struct {
-	Port          int
-	Path          string
-	Provider      string
+	// Port is the fixed registered port, or 0 to take any free one.
+	Port     int
+	Path     string
+	Provider string
+	// ExpectedState is the CSRF value the redirect must carry back. Empty
+	// means the provider round-trips no state, and an unguessable callback
+	// path is doing that job instead.
 	ExpectedState string
+	// Exchange, when set, runs inside the request handler before the browser
+	// is answered, so a failed token exchange is reported on the page the user
+	// is looking at rather than only in a terminal they may have left.
+	Exchange func(ctx context.Context, code string) error
 }
 
 func startCallbackServer(cfg callbackConfig) (*callbackServer, error) {
@@ -61,13 +75,25 @@ func startCallbackServer(cfg callbackConfig) (*callbackServer, error) {
 		case errParam != "":
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = io.WriteString(w, ErrorHTML(cfg.Provider+" authentication did not complete.", "Error: "+errParam))
-		case code == "" || state == "":
+			cs.fail(fmt.Errorf("%s authorization failed: %s", cfg.Provider, errParam))
+		case code == "":
 			w.WriteHeader(http.StatusBadRequest)
-			_, _ = io.WriteString(w, ErrorHTML("Missing code or state parameter.", ""))
-		case state != cfg.ExpectedState:
+			_, _ = io.WriteString(w, ErrorHTML("Missing code parameter.", ""))
+		case cfg.ExpectedState != "" && state == "":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, ErrorHTML("Missing state parameter.", ""))
+		case cfg.ExpectedState != "" && state != cfg.ExpectedState:
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = io.WriteString(w, ErrorHTML("State mismatch.", ""))
 		default:
+			if cfg.Exchange != nil {
+				if err := cfg.Exchange(r.Context(), code); err != nil {
+					w.WriteHeader(http.StatusBadGateway)
+					_, _ = io.WriteString(w, ErrorHTML(cfg.Provider+" key exchange failed.", err.Error()))
+					cs.fail(err)
+					return
+				}
+			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = io.WriteString(w, SuccessHTML(cfg.Provider+" authentication completed. You can close this window."))
 			cs.settle(callbackResult{Code: code, State: state})
@@ -78,9 +104,23 @@ func startCallbackServer(cfg callbackConfig) (*callbackServer, error) {
 	return cs, nil
 }
 
+// URL returns the address the provider should redirect to. It is only
+// meaningful for a server on an ephemeral port, where the port is not known
+// until it is listening.
+func (c *callbackServer) URL(path string) string {
+	addr, ok := c.ln.Addr().(*net.TCPAddr)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("http://%s%s", net.JoinHostPort(callbackHost(), strconv.Itoa(addr.Port)), path)
+}
+
 func (c *callbackServer) settle(res callbackResult) {
 	c.once.Do(func() { c.ch <- res })
 }
+
+// fail settles the wait with an error the browser has already been shown.
+func (c *callbackServer) fail(err error) { c.settle(callbackResult{Err: err}) }
 
 // Wait returns a channel that yields the captured code, or a zero value if the
 // wait is cancelled.

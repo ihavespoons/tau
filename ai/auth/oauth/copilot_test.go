@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,10 +14,32 @@ import (
 )
 
 // recordingInteraction captures what the user would have been told.
-type recordingInteraction struct{ events []auth.Event }
+//
+// It is mutex-guarded because a browser-redirect flow notifies from the login
+// goroutine while the test watches from its own, waiting for the URL to visit.
+type recordingInteraction struct {
+	mu     sync.Mutex
+	events []auth.Event
+	// answer is what Prompt returns; set it before the login starts.
+	answer string
+}
 
-func (r *recordingInteraction) Prompt(context.Context, auth.Prompt) (string, error) { return "", nil }
-func (r *recordingInteraction) Notify(ev auth.Event)                                { r.events = append(r.events, ev) }
+func (r *recordingInteraction) Prompt(context.Context, auth.Prompt) (string, error) {
+	return r.answer, nil
+}
+
+func (r *recordingInteraction) Notify(ev auth.Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, ev)
+}
+
+// seen returns a snapshot of the events so far.
+func (r *recordingInteraction) seen() []auth.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]auth.Event(nil), r.events...)
+}
 
 // copilotServer stands in for github.com and the Copilot token endpoint. The
 // flow spans three endpoints on two hosts, which is the shape worth testing.

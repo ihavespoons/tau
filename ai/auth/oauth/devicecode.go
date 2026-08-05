@@ -3,6 +3,8 @@ package oauth
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/url"
 	"time"
 )
 
@@ -27,6 +29,25 @@ const (
 
 // ErrLoginCancelled is returned when the caller aborts a device flow.
 var ErrLoginCancelled = errors.New("login cancelled")
+
+// validateVerificationURI checks a URI the authorization server asked us to
+// open in the user's browser.
+//
+// This is a security check, not a formatting one. The value comes from an HTTP
+// response and is handed to the platform's opener, so an unconstrained scheme
+// could name a local executable or a file. Most providers are held to https;
+// allowHTTP exists for GitHub, whose enterprise installations are reachable
+// over plain http on an internal network.
+func validateVerificationURI(provider, raw string, allowHTTP bool) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("%s: untrusted verification_uri in device code response", provider)
+	}
+	if u.Scheme != "https" && (!allowHTTP || u.Scheme != "http") {
+		return "", fmt.Errorf("%s: untrusted verification_uri in device code response", provider)
+	}
+	return u.String(), nil
+}
 
 // PollStatus is the outcome of one poll.
 type PollStatus int

@@ -224,13 +224,13 @@ func (c *Copilot) startDeviceFlow(ctx context.Context) (*deviceCodeResponse, err
 		return nil, fmt.Errorf("copilot: incomplete device code response")
 	}
 
-	// The verification URI is handed to the user's browser opener, so it has
-	// to be a web URL — anything else could name a local executable.
-	u, err := url.Parse(device.VerificationURI)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
-		return nil, fmt.Errorf("copilot: untrusted verification_uri in device code response")
+	// GitHub Enterprise installations are reachable over plain http on an
+	// internal network, so this is the one flow that allows it.
+	verification, err := validateVerificationURI("copilot", device.VerificationURI, true)
+	if err != nil {
+		return nil, err
 	}
-	device.VerificationURI = u.String()
+	device.VerificationURI = verification
 	return &device, nil
 }
 

@@ -106,6 +106,16 @@ func builtinOAuth(id string) auth.OAuthAuth {
 		return oauth.NewCopilot()
 	case "openai-codex":
 		return oauth.NewCodex()
+	case "openrouter":
+		return oauth.NewOpenRouter()
+	case "kimi-coding":
+		return oauth.NewKimi()
+	case "xai":
+		return oauth.NewXAI()
 	}
+	// Radius is implemented (ai/auth/oauth/radius.go) but deliberately not
+	// listed: it is a pi-messages provider with a catalog fetched from the
+	// gateway, and tau has neither. Offering the login would let a user
+	// authenticate to a provider whose models they still could not reach.
 	return nil
 }

@@ -197,6 +197,11 @@ func (c *Codex) awaitCode(ctx context.Context, srv *callbackServer, in auth.Inte
 
 	select {
 	case res := <-srv.Wait():
+		if res.Err != nil {
+			// The provider said why it refused; repeating that beats a generic
+			// message about a missing code.
+			return "", res.Err
+		}
 		if res.Code == "" {
 			return "", fmt.Errorf("codex: the browser redirect did not carry an authorization code")
 		}

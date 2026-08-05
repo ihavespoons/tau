@@ -90,7 +90,7 @@ usage:
   tau -c                 continue the most recent session here
   tau -p "prompt"        run the agent (non-interactive)
   tau -p -c "prompt"     continue the most recent session here
-  tau login [provider]   log in (default: anthropic; also github-copilot, openai-codex)
+  tau login [provider]   log in (default: anthropic; an unknown name lists the rest)
   tau login -k           store an API key instead
   tau logout [provider]  remove stored credentials
   tau models             list available models
@@ -387,6 +387,9 @@ var loginFlows = map[string]func() auth.OAuthAuth{
 	"anthropic":      func() auth.OAuthAuth { return oauth.NewAnthropic() },
 	"github-copilot": func() auth.OAuthAuth { return oauth.NewCopilot() },
 	"openai-codex":   func() auth.OAuthAuth { return oauth.NewCodex() },
+	"openrouter":     func() auth.OAuthAuth { return oauth.NewOpenRouter() },
+	"kimi-coding":    func() auth.OAuthAuth { return oauth.NewKimi() },
+	"xai":            func() auth.OAuthAuth { return oauth.NewXAI() },
 }
 
 func loginProviders() []string {

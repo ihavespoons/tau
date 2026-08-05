@@ -185,6 +185,11 @@ func (a *Anthropic) Login(ctx context.Context, in auth.Interaction) (*auth.Crede
 
 	select {
 	case res := <-serverCh:
+		if res.Err != nil {
+			// The provider said why it refused; repeating that beats falling
+			// through to a generic "no code" message.
+			return nil, res.Err
+		}
 		if res.Code != "" {
 			code, gotState = res.Code, res.State
 		}

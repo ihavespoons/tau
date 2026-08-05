@@ -74,12 +74,16 @@ and the ChatGPT Codex backend — between them, every provider in the catalog
 except Pi's own server protocol. A model on a wire tau cannot talk to is still
 listed and selectable, and says so by name rather than pretending not to exist.
 
-Three providers have a login rather than a key:
+Six providers have a login rather than a key, so a subscription you already pay
+for works without one:
 
 ```sh
 tau login                    # Anthropic — Claude Pro/Max
 tau login github-copilot     # device flow
 tau login openai-codex       # ChatGPT subscription
+tau login openrouter         # browser; yields a permanent API key
+tau login xai                # device flow — SuperGrok or X Premium
+tau login kimi-coding        # device flow
 ```
 
 Two authenticate from the ambient cloud environment instead. Vertex uses
