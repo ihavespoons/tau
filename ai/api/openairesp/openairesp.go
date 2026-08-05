@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ihavespoons/tau/ai"
+	"github.com/ihavespoons/tau/ai/api/apishared"
 	"github.com/ihavespoons/tau/ai/internal/sse"
 	"github.com/ihavespoons/tau/ai/partialjson"
 )
@@ -92,15 +93,32 @@ func run(ctx context.Context, stream *ai.MessageStream, model *ai.Model, c ai.Co
 	}()
 
 	cm := resolveCompat(model)
-	req := buildRequest(model, c, opts, cm)
-
-	body, err := encodePayload(req, model, opts)
+	// Which tools are grammar tools is decided once, from the tool definitions.
+	// Both the request and the RESPONSE need it: a replayed call carries only a
+	// name and arguments, and a streamed custom tool call carries only a name
+	// and raw text — neither says which argument that text belongs in.
+	grammar, err := apishared.GrammarToolInputProperties(c.Tools, cm.SupportsOpenAIGrammarTools)
+	if err != nil {
+		fail(stream, out, ctx, err)
+		return
+	}
+	req, err := buildRequest(model, c, opts, cm, grammar)
 	if err != nil {
 		fail(stream, out, ctx, err)
 		return
 	}
 
-	resp, err := doRequest(ctx, model, opts, cm, body)
+	body, err2 := encodePayload(req, model, opts)
+	if err = err2; err != nil {
+		fail(stream, out, ctx, err)
+		return
+	}
+
+	// Retried on the same policy every other wire uses: a 429 or a 5xx from a
+	// gateway is routine, and without this one costs the whole turn.
+	resp, err := apishared.RetryRequest(ctx, func() (*http.Response, error) {
+		return doRequest(ctx, model, c, opts, cm, body)
+	}, opts.MaxRetries, opts.MaxRetryDelayMs)
 	if err != nil {
 		fail(stream, out, ctx, err)
 		return
@@ -120,7 +138,7 @@ func run(ctx context.Context, stream *ai.MessageStream, model *ai.Model, c ai.Co
 
 	stream.Push(ai.Event{Type: ai.EventStart, Partial: out})
 
-	if err := consume(ctx, resp.Body, stream, out, model, opts); err != nil {
+	if err := consume(ctx, resp.Body, stream, out, model, opts, grammar); err != nil {
 		fail(stream, out, ctx, err)
 		return
 	}
@@ -172,6 +190,27 @@ type slot struct {
 	partialJSON string
 	args        map[string]any
 	hasPartial  bool
+	// grammar is set for a custom (grammar-constrained) tool call, whose input
+	// arrives as raw text rather than as JSON arguments.
+	grammar *grammarInput
+}
+
+// grammarInput re-wraps a grammar tool's streamed text as JSON-argument deltas,
+// so a consumer sees one shape of tool call rather than two.
+type grammarInput struct {
+	property string
+	buffer   apishared.GrammarInputBuffer
+}
+
+// appendGrammarInput advances the buffer and mirrors the text into the slot's
+// arguments, so the partial call is coherent at every delta.
+func (s *slot) appendGrammarInput(nextInput string, close bool) (string, error) {
+	delta, err := s.grammar.buffer.AppendJSONDelta(s.grammar.property, nextInput, close)
+	if err != nil {
+		return "", err
+	}
+	s.args = map[string]any{s.grammar.property: nextInput}
+	return delta, nil
 }
 
 func (s *slot) materialize() ai.Content {
@@ -194,10 +233,12 @@ type state struct {
 	out      *ai.AssistantMessage
 	byIndex  map[int]*slot
 	reasonBy map[string]*slot // reasoning item id → slot, for signature backfill
+	// grammar maps a tool name to the argument its raw output belongs in.
+	grammar map[string]string
 }
 
-func newState(out *ai.AssistantMessage) *state {
-	return &state{out: out, byIndex: map[int]*slot{}, reasonBy: map[string]*slot{}}
+func newState(out *ai.AssistantMessage, grammar map[string]string) *state {
+	return &state{out: out, byIndex: map[int]*slot{}, reasonBy: map[string]*slot{}, grammar: grammar}
 }
 
 // sync writes a slot's current value back into the message.
@@ -218,6 +259,19 @@ func (s *state) open(index int, it outputItem) *slot {
 			kind: "toolCall", toolID: it.CallID + "|" + it.ID, toolName: it.Name,
 			partialJSON: it.Arguments, hasPartial: true,
 		}
+	case "custom_tool_call":
+		// The fallback is for a tool tau never declared: the model invented a
+		// custom call, and its output still needs somewhere to live rather than
+		// being dropped on the floor.
+		property := s.grammar[it.Name]
+		if property == "" {
+			property = "input"
+		}
+		sl = &slot{
+			kind: "toolCall", toolID: it.CallID + "|" + it.ID, toolName: it.Name,
+			args:    map[string]any{property: it.Input},
+			grammar: &grammarInput{property: property},
+		}
 	default:
 		return nil
 	}
@@ -237,8 +291,8 @@ func (s *state) get(index int, kind string) *slot {
 }
 
 // consume drains the SSE stream.
-func consume(ctx context.Context, body io.Reader, stream *ai.MessageStream, out *ai.AssistantMessage, model *ai.Model, opts *Options) error {
-	st := newState(out)
+func consume(ctx context.Context, body io.Reader, stream *ai.MessageStream, out *ai.AssistantMessage, model *ai.Model, opts *Options, grammar map[string]string) error {
+	st := newState(out, grammar)
 	sawTerminal := false
 
 	reader := sse.NewReader(body)
@@ -327,12 +381,49 @@ func consume(ctx context.Context, body io.Reader, stream *ai.MessageStream, out 
 				})
 			}
 
+		case "response.custom_tool_call_input.delta":
+			sl := st.get(e.OutputIndex, "toolCall")
+			if sl == nil || sl.grammar == nil {
+				continue
+			}
+			delta, err := sl.appendGrammarInput(sl.grammar.buffer.Input()+e.Delta, false)
+			if err != nil {
+				return err
+			}
+			st.sync(sl)
+			if delta != "" {
+				stream.Push(ai.Event{
+					Type: ai.EventToolCallDelta, ContentIndex: sl.index, Delta: delta, Partial: out,
+				})
+			}
+
+		case "response.custom_tool_call_input.done":
+			sl := st.get(e.OutputIndex, "toolCall")
+			if sl == nil || sl.grammar == nil {
+				continue
+			}
+			// The done event carries the complete input, so the buffer is
+			// advanced to it and closed in one step — anything the deltas
+			// missed still lands before the call is handed on.
+			delta, err := sl.appendGrammarInput(e.Input, true)
+			if err != nil {
+				return err
+			}
+			st.sync(sl)
+			if delta != "" {
+				stream.Push(ai.Event{
+					Type: ai.EventToolCallDelta, ContentIndex: sl.index, Delta: delta, Partial: out,
+				})
+			}
+
 		case "response.output_item.done":
 			it, err := decodeOutputItem(e.Item)
 			if err != nil {
 				continue
 			}
-			closeItem(st, stream, e.OutputIndex, it, e.Item)
+			if err := closeItem(st, stream, e.OutputIndex, it, e.Item); err != nil {
+				return err
+			}
 
 		// response.done is the ChatGPT backend's spelling of response.completed.
 		// Without it that stream ends with no terminal event and the turn is
@@ -382,12 +473,12 @@ func appendThinking(st *state, stream *ai.MessageStream, index int, delta string
 
 // closeItem finalizes a slot from the item's completed form, which is
 // authoritative over anything assembled from deltas.
-func closeItem(st *state, stream *ai.MessageStream, index int, it outputItem, raw json.RawMessage) {
+func closeItem(st *state, stream *ai.MessageStream, index int, it outputItem, raw json.RawMessage) error {
 	sl, ok := st.byIndex[index]
 	if !ok {
 		// The wire may report an item tau never saw start.
 		if sl = st.open(index, it); sl == nil {
-			return
+			return nil
 		}
 	}
 
@@ -435,7 +526,32 @@ func closeItem(st *state, stream *ai.MessageStream, index int, it outputItem, ra
 			Type: ai.EventToolCallEnd, ContentIndex: sl.index, ToolCall: &call, Partial: st.out,
 		})
 		delete(st.byIndex, index)
+
+	case it.Type == "custom_tool_call" && sl.kind == "toolCall" && sl.grammar != nil:
+		// The item's own input wins over what the deltas built: it is the
+		// complete value, and closing the buffer here is what makes the
+		// arguments valid JSON.
+		final := it.Input
+		if final == "" {
+			final = sl.grammar.buffer.Input()
+		}
+		delta, err := sl.appendGrammarInput(final, true)
+		if err != nil {
+			return err
+		}
+		st.sync(sl)
+		if delta != "" {
+			stream.Push(ai.Event{
+				Type: ai.EventToolCallDelta, ContentIndex: sl.index, Delta: delta, Partial: st.out,
+			})
+		}
+		call, _ := st.out.Content[sl.index].(ai.ToolCall)
+		stream.Push(ai.Event{
+			Type: ai.EventToolCallEnd, ContentIndex: sl.index, ToolCall: &call, Partial: st.out,
+		})
+		delete(st.byIndex, index)
 	}
+	return nil
 }
 
 func joinParts(parts []summaryPart) string {

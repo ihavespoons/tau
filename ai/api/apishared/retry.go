@@ -1,7 +1,12 @@
-package anthropic
+package apishared
 
 // Port of Pi's utils/provider-retry.ts: SDK-equivalent retry behavior with an
 // interruptible backoff sleep and a cap on server-requested delays.
+//
+// This lived in the anthropic package until the OpenAI wires needed it too.
+// Pi applies the same policy on every wire, and a second copy would drift into
+// two different answers to "is this failure worth retrying" — which is the
+// question that decides whether a 429 ends a session or costs three seconds.
 
 import (
 	"context"
@@ -92,8 +97,8 @@ func retryDelayMs(err error, retryIndex int, maxRetryDelayMs int) (float64, erro
 	return exponential * (1 - rand.Float64()*0.25), nil
 }
 
-// retryRequest runs do with Pi's retry policy. maxRetries nil means 0.
-func retryRequest(ctx context.Context, do func() (*http.Response, error), maxRetries *int, maxRetryDelayMs int) (*http.Response, error) {
+// RetryRequest runs do with Pi's retry policy. maxRetries nil means 0.
+func RetryRequest(ctx context.Context, do func() (*http.Response, error), maxRetries *int, maxRetryDelayMs int) (*http.Response, error) {
 	retries := 0
 	if maxRetries != nil {
 		retries = *maxRetries

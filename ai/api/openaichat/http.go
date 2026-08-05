@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ihavespoons/tau/ai"
+	"github.com/ihavespoons/tau/ai/api/apishared"
 )
 
 // defaultTimeout matches Pi's provider default.
@@ -28,7 +29,7 @@ func completionsURL(baseURL string) string {
 // buildHeaders assembles the request headers: tau's defaults, the model's own,
 // then the caller's overrides. A nil override value suppresses a default,
 // which is Pi's way of letting a gateway drop the Authorization header.
-func buildHeaders(model *ai.Model, opts *Options, cm compat) http.Header {
+func buildHeaders(model *ai.Model, c ai.Context, opts *Options, cm compat) http.Header {
 	h := http.Header{}
 	h.Set("Content-Type", "application/json")
 	h.Set("Accept", "text/event-stream")
@@ -38,6 +39,15 @@ func buildHeaders(model *ai.Model, opts *Options, cm compat) http.Header {
 	}
 	for k, v := range model.Headers {
 		h.Set(k, v)
+	}
+
+	// Copilot derives headers from the turn itself — who started it, and
+	// whether it carries images. Without the vision header an image request is
+	// refused with an error about the model rather than about the header.
+	if model.Provider == apishared.CopilotHeaderProvider {
+		for k, v := range apishared.CopilotDynamicHeaders(c.Messages) {
+			h.Set(k, v)
+		}
 	}
 
 	// Session affinity keeps a multi-turn conversation on one backend, which

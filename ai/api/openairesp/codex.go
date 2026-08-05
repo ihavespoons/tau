@@ -88,15 +88,32 @@ func runCodex(ctx context.Context, stream *ai.MessageStream, model *ai.Model, c 
 	}
 
 	cm := resolveCodexCompat(model)
-	req := buildCodexRequest(model, c, opts, cm)
-
-	body, err := encodeCodexPayload(req, model, &opts.Options)
+	// Which tools are grammar tools is decided once, from the tool definitions.
+	// Both the request and the RESPONSE need it: a replayed call carries only a
+	// name and arguments, and a streamed custom tool call carries only a name
+	// and raw text — neither says which argument that text belongs in.
+	grammar, err := apishared.GrammarToolInputProperties(c.Tools, cm.SupportsOpenAIGrammarTools)
+	if err != nil {
+		fail(stream, out, ctx, err)
+		return
+	}
+	req, err := buildCodexRequest(model, c, opts, cm, grammar)
 	if err != nil {
 		fail(stream, out, ctx, err)
 		return
 	}
 
-	resp, err := doCodexRequest(ctx, model, opts, accountID, body)
+	body, err2 := encodeCodexPayload(req, model, &opts.Options)
+	if err = err2; err != nil {
+		fail(stream, out, ctx, err)
+		return
+	}
+
+	// Retried on the same policy every other wire uses: a 429 or a 5xx from a
+	// gateway is routine, and without this one costs the whole turn.
+	resp, err := apishared.RetryRequest(ctx, func() (*http.Response, error) {
+		return doCodexRequest(ctx, model, opts, accountID, body)
+	}, opts.MaxRetries, opts.MaxRetryDelayMs)
 	if err != nil {
 		fail(stream, out, ctx, err)
 		return
@@ -115,7 +132,7 @@ func runCodex(ctx context.Context, stream *ai.MessageStream, model *ai.Model, c 
 	}
 
 	stream.Push(ai.Event{Type: ai.EventStart, Partial: out})
-	if err := consume(ctx, resp.Body, stream, out, model, &opts.Options); err != nil {
+	if err := consume(ctx, resp.Body, stream, out, model, &opts.Options, grammar); err != nil {
 		fail(stream, out, ctx, err)
 		return
 	}
@@ -164,7 +181,7 @@ type codexText struct {
 // system prompt. It rejects an empty instructions field.
 const defaultInstructions = "You are a helpful assistant."
 
-func buildCodexRequest(model *ai.Model, c ai.Context, opts *CodexOptions, cm compat) codexRequest {
+func buildCodexRequest(model *ai.Model, c ai.Context, opts *CodexOptions, cm compat, grammar map[string]string) (codexRequest, error) {
 	immediate, deferredTools := apishared.SplitDeferredTools(c, cm.SupportsToolSearch, nil)
 	deferred := make(map[string]ai.Tool, len(deferredTools))
 	for _, t := range deferredTools {
@@ -186,11 +203,16 @@ func buildCodexRequest(model *ai.Model, c ai.Context, opts *CodexOptions, cm com
 	withoutSystem := c
 	withoutSystem.SystemPrompt = ""
 
+	input, err := convertMessages(model, withoutSystem, cm, deferred, grammar)
+	if err != nil {
+		return codexRequest{}, err
+	}
+
 	req := codexRequest{
 		Model:  model.ID,
 		Store:  false,
 		Stream: true,
-		Input:  convertMessages(model, withoutSystem, cm, deferred),
+		Input:  input,
 		// Always: a subscription conversation runs long, and losing the
 		// model's train of thought halfway through is the failure people
 		// actually notice.
@@ -208,7 +230,11 @@ func buildCodexRequest(model *ai.Model, c ai.Context, opts *CodexOptions, cm com
 		req.ToolChoice = "auto"
 	}
 	if len(immediate) > 0 {
-		req.Tools = convertTools(immediate, cm, false)
+		tools, err := convertTools(immediate, cm, false)
+		if err != nil {
+			return codexRequest{}, err
+		}
+		req.Tools = tools
 	}
 
 	if opts.Reasoning != "" {
@@ -220,7 +246,7 @@ func buildCodexRequest(model *ai.Model, c ai.Context, opts *CodexOptions, cm com
 			req.Reasoning = &reasoning{Effort: effort, Summary: summary}
 		}
 	}
-	return req
+	return req, nil
 }
 
 func encodeCodexPayload(req codexRequest, model *ai.Model, opts *Options) ([]byte, error) {

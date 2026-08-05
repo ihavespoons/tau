@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ihavespoons/tau/ai"
+	"github.com/ihavespoons/tau/ai/api/apishared"
 )
 
 // modelFor builds a model for one provider/base-URL pair, which is all
@@ -34,7 +35,15 @@ func payloadFor(t *testing.T, model *ai.Model, c ai.Context, opts *Options) map[
 	if opts == nil {
 		opts = &Options{}
 	}
-	req := buildRequest(model, c, opts, resolveCompat(model))
+	cm := resolveCompat(model)
+	grammar, err := apishared.GrammarToolInputProperties(c.Tools, cm.SupportsOpenAIGrammarTools)
+	if err != nil {
+		t.Fatalf("resolving grammar tools: %v", err)
+	}
+	req, err := buildRequest(model, c, opts, cm, grammar)
+	if err != nil {
+		t.Fatalf("building request: %v", err)
+	}
 	raw, err := json.Marshal(req)
 	if err != nil {
 		t.Fatalf("marshalling payload: %v", err)

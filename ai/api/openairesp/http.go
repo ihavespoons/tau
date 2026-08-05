@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ihavespoons/tau/ai"
+	"github.com/ihavespoons/tau/ai/api/apishared"
 )
 
 // defaultTimeout matches the other wires.
@@ -62,13 +63,22 @@ func httpClient(timeoutMs int) *http.Client {
 
 // buildHeaders assembles tau's defaults, the model's own, then the caller's
 // overrides.
-func buildHeaders(model *ai.Model, opts *Options, cm compat) http.Header {
+func buildHeaders(model *ai.Model, c ai.Context, opts *Options, cm compat) http.Header {
 	h := baseHeaders()
 	if opts.APIKey != "" {
 		h.Set("Authorization", "Bearer "+opts.APIKey)
 	}
 	for k, v := range model.Headers {
 		h.Set(k, v)
+	}
+
+	// Copilot derives headers from the turn itself — who started it, and
+	// whether it carries images. Without the vision header an image request is
+	// refused with an error about the model rather than about the header.
+	if model.Provider == apishared.CopilotHeaderProvider {
+		for k, v := range apishared.CopilotDynamicHeaders(c.Messages) {
+			h.Set(k, v)
+		}
 	}
 
 	// Session affinity keeps a multi-turn conversation on one backend, which
@@ -90,7 +100,7 @@ func buildHeaders(model *ai.Model, opts *Options, cm compat) http.Header {
 }
 
 // doRequest sends the payload and returns the streaming response.
-func doRequest(ctx context.Context, model *ai.Model, opts *Options, cm compat, body []byte) (*http.Response, error) {
+func doRequest(ctx context.Context, model *ai.Model, c ai.Context, opts *Options, cm compat, body []byte) (*http.Response, error) {
 	if opts.APIKey == "" && !hasAuthHeader(opts) {
 		return nil, fmt.Errorf("no API key for provider %s", model.Provider)
 	}
@@ -99,7 +109,7 @@ func doRequest(ctx context.Context, model *ai.Model, opts *Options, cm compat, b
 	if err != nil {
 		return nil, err
 	}
-	req.Header = buildHeaders(model, opts, cm)
+	req.Header = buildHeaders(model, c, opts, cm)
 	return httpClient(opts.TimeoutMs).Do(req)
 }
 

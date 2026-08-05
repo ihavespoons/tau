@@ -136,7 +136,10 @@ func normalizeToolCallID(id string, provider ai.ProviderId) string {
 
 // convertMessages turns tau's transcript into the chat-completions `messages`
 // array, applying every compat quirk that affects message shape.
-func convertMessages(model *ai.Model, c ai.Context, cm compat) []message {
+// convertMessages renders the transcript. grammar maps a tool name to the
+// argument that carries its raw output, for the tools declared with a grammar;
+// a call to one of those is replayed as a custom tool call rather than as JSON.
+func convertMessages(model *ai.Model, c ai.Context, cm compat, grammar map[string]string) ([]message, error) {
 	var out []message
 
 	normalize := func(id string, _ ai.AssistantMessage) string { return normalizeToolCallID(id, model.Provider) }
@@ -172,21 +175,29 @@ func convertMessages(model *ai.Model, c ai.Context, cm compat) []message {
 			lastRole = "user"
 
 		case ai.AssistantMessage:
-			if converted, ok := convertAssistant(m, model, cm); ok {
+			converted, ok, err := convertAssistant(m, model, cm, grammar)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
 				out = append(out, converted)
 			}
 			lastRole = "assistant"
 
 		case ai.ToolResultMessage:
 			var consumed int
-			out, consumed, lastRole = convertToolResults(out, msgs[i:], model, c.Tools, cm)
+			var err error
+			out, consumed, lastRole, err = convertToolResults(out, msgs[i:], model, c.Tools, cm)
+			if err != nil {
+				return nil, err
+			}
 			i += consumed - 1
 
 		default:
 			lastRole = ""
 		}
 	}
-	return out
+	return out, nil
 }
 
 // bridgeText is the filler assistant turn for providers that will not accept a
@@ -224,7 +235,7 @@ func dataURL(img ai.ImageContent) string {
 // and some models (DeepSeek V3.2 via NVIDIA NIM among them) mirror the block
 // structure literally back into their output, producing nested JSON where
 // prose belongs.
-func convertAssistant(m ai.AssistantMessage, model *ai.Model, cm compat) (message, bool) {
+func convertAssistant(m ai.AssistantMessage, model *ai.Model, cm compat, grammar map[string]string) (message, bool, error) {
 	out := message{Role: "assistant"}
 	if cm.RequiresAssistantAfterToolResult {
 		out.Content = "" // some providers reject null content
@@ -293,6 +304,22 @@ func convertAssistant(m ai.AssistantMessage, model *ai.Model, cm compat) (messag
 		out.ToolCalls = make([]toolCall, 0, len(toolCalls))
 		var reasoningDetails []any
 		for _, tc := range toolCalls {
+			// A call to a grammar tool goes back as the text the model
+			// produced, not as JSON. Replaying it as a function call would
+			// contradict the tool declaration in the same request.
+			if property, isGrammar := grammar[tc.Name]; isGrammar {
+				input, err := apishared.GrammarToolInput(tc.Name, tc.Arguments, property)
+				if err != nil {
+					return message{}, false, err
+				}
+				out.ToolCalls = append(out.ToolCalls, toolCall{
+					ID:     tc.ID,
+					Type:   "custom",
+					Custom: &toolCallCust{Name: tc.Name, Input: apishared.SanitizeSurrogates(input)},
+				})
+				continue
+			}
+
 			args, err := json.Marshal(tc.Arguments)
 			if err != nil {
 				args = []byte("{}")
@@ -328,9 +355,9 @@ func convertAssistant(m ai.AssistantMessage, model *ai.Model, cm compat) (messag
 	// Providers insist on "content or tool_calls, but not neither" — which is
 	// exactly what an aborted turn that produced nothing looks like.
 	if !out.hasContent() && len(out.ToolCalls) == 0 {
-		return message{}, false
+		return message{}, false, nil
 	}
-	return out, true
+	return out, true, nil
 }
 
 func (m *message) setExtra(key string, value any) {
@@ -360,7 +387,7 @@ func (m message) hasContent() bool {
 // Images cannot ride along in a tool message, so they are re-attached as a
 // following user message — the only way a vision model gets to see what a tool
 // produced.
-func convertToolResults(out []message, msgs ai.MessageList, model *ai.Model, tools []ai.Tool, cm compat) ([]message, int, string) {
+func convertToolResults(out []message, msgs ai.MessageList, model *ai.Model, tools []ai.Tool, cm compat) ([]message, int, string, error) {
 	var images []any
 	deferredNames := map[string]bool{}
 
@@ -435,11 +462,15 @@ func convertToolResults(out []message, msgs ai.MessageList, model *ai.Model, too
 		if len(deferred) > 0 {
 			// Kimi takes newly-available tools as a system message carrying a
 			// `tools` field and no content at all.
+			converted, err := convertTools(deferred, cm)
+			if err != nil {
+				return nil, 0, "", err
+			}
 			sys := message{Role: "system"}
-			sys.setExtra("tools", convertTools(deferred, cm))
+			sys.setExtra("tools", converted)
 			out = append(out, sys)
 		}
 	}
 
-	return out, consumed, lastRole
+	return out, consumed, lastRole, nil
 }

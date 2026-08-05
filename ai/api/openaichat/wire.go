@@ -56,11 +56,30 @@ type toolCallDelta struct {
 	ID       string             `json:"id"`
 	Type     string             `json:"type"`
 	Function *toolCallDeltaFunc `json:"function"`
+	// Custom carries a grammar tool's output, which streams as raw text rather
+	// than as JSON arguments.
+	Custom *toolCallDeltaCust `json:"custom"`
 }
 
 type toolCallDeltaFunc struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
+}
+
+type toolCallDeltaCust struct {
+	Name  string `json:"name"`
+	Input string `json:"input"`
+}
+
+// name returns whichever of the two shapes carried it.
+func (t *toolCallDelta) name() string {
+	if t.Function != nil && t.Function.Name != "" {
+		return t.Function.Name
+	}
+	if t.Custom != nil {
+		return t.Custom.Name
+	}
+	return ""
 }
 
 type usagePayload struct {

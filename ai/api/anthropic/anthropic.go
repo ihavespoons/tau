@@ -369,7 +369,7 @@ func run(ctx context.Context, stream *ai.MessageStream, model *ai.Model, c ai.Co
 
 	headers := buildHeaders(model, c, oauth, opts)
 
-	resp, err := retryRequest(ctx, func() (*http.Response, error) {
+	resp, err := apishared.RetryRequest(ctx, func() (*http.Response, error) {
 		return doRequest(ctx, model.BaseURL, headers, body, opts.TimeoutMs)
 	}, opts.MaxRetries, opts.MaxRetryDelayMs)
 	if err != nil {
@@ -449,12 +449,18 @@ func buildHeaders(model *ai.Model, c ai.Context, oauth bool, opts *Options) http
 	}
 
 	switch {
-	case model.Provider == "github-copilot":
+	case model.Provider == apishared.CopilotHeaderProvider:
 		if len(betas) > 0 {
 			merged["anthropic-beta"] = strings.Join(betas, ",")
 		}
 		if opts.APIKey != "" {
 			merged["authorization"] = "Bearer " + opts.APIKey
+		}
+		// Copilot derives headers from the turn itself — who started it, and
+		// whether it carries images. Without the vision header an image request
+		// is refused with an error about the model rather than about the header.
+		for k, v := range apishared.CopilotDynamicHeaders(c.Messages) {
+			merged[strings.ToLower(k)] = v
 		}
 	case oauth:
 		merged["anthropic-beta"] = strings.Join(append([]string{"claude-code-20250219", "oauth-2025-04-20"}, betas...), ",")

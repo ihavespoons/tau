@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/ihavespoons/tau/ai"
+	"github.com/ihavespoons/tau/ai/api/apishared"
 )
 
 // request is the chat-completions body. Extra carries the fields that are not
@@ -52,8 +53,20 @@ type toolFunc struct {
 }
 
 type toolCustom struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	Name        string        `json:"name"`
+	Description string        `json:"description,omitempty"`
+	Format      *customFormat `json:"format,omitempty"`
+}
+
+type customFormat struct {
+	Type    string         `json:"type"`
+	Grammar *grammarFormat `json:"grammar,omitempty"`
+}
+
+type grammarFormat struct {
+	// Syntax is "lark" or "regex".
+	Syntax     string `json:"syntax"`
+	Definition string `json:"definition"`
 }
 
 // MarshalJSON folds Extra in, the same way message does.
@@ -88,12 +101,26 @@ func (r *request) setExtra(key string, value any) {
 }
 
 // buildRequest assembles the payload for one turn.
-func buildRequest(model *ai.Model, c ai.Context, opts *Options, cm compat) request {
+//
+// It can fail, which no other wire's does: a tool may declare constrained
+// sampling this provider cannot honour, and the tool asked for the constraint
+// to be required. Sending the request anyway would let the model answer in a
+// shape the tool has been told it will never receive.
+// grammar maps a tool name to the argument carrying its raw output, for the
+// tools declared with a grammar. It is resolved once by the caller because the
+// streaming side needs the same answer, and two derivations of "which tools are
+// grammar tools" would eventually disagree.
+func buildRequest(model *ai.Model, c ai.Context, opts *Options, cm compat, grammar map[string]string) (request, error) {
 	retention := resolveCacheRetention(opts.CacheRetention, opts.Env)
+
+	messages, err := convertMessages(model, c, cm, grammar)
+	if err != nil {
+		return request{}, err
+	}
 
 	req := request{
 		Model:    model.ID,
-		Messages: convertMessages(model, c, cm),
+		Messages: messages,
 		Stream:   true,
 	}
 
@@ -128,7 +155,9 @@ func buildRequest(model *ai.Model, c ai.Context, opts *Options, cm compat) reque
 		req.Temperature = opts.Temperature
 	}
 
-	applyTools(&req, model, c, cm)
+	if err := applyTools(&req, model, c, cm); err != nil {
+		return request{}, err
+	}
 	// After applyTools, because the markers land on the tool list it produced.
 	if cc := compatCacheControl(cm, retention); cc != nil {
 		applyAnthropicCacheControl(req.Messages, req.Tools, cc)
@@ -136,12 +165,12 @@ func buildRequest(model *ai.Model, c ai.Context, opts *Options, cm compat) reque
 	applyThinking(&req, model, opts, cm)
 	applyRouting(&req, model)
 
-	return req
+	return req, nil
 }
 
 // applyTools converts the active tool set, holding back any tool the
 // transcript has deferred.
-func applyTools(req *request, model *ai.Model, c ai.Context, cm compat) {
+func applyTools(req *request, model *ai.Model, c ai.Context, cm compat) error {
 	active := c.Tools
 	if cm.DeferredToolsMode == "kimi" {
 		deferred := deferredToolNames(c.Messages)
@@ -156,12 +185,15 @@ func applyTools(req *request, model *ai.Model, c ai.Context, cm compat) {
 	}
 
 	if len(active) > 0 {
-		converted := convertTools(active, cm)
+		converted, err := convertTools(active, cm)
+		if err != nil {
+			return err
+		}
 		req.Tools = &converted
 		if cm.ZaiToolStream {
 			req.setExtra("tool_stream", true)
 		}
-		return
+		return nil
 	}
 
 	// Anthropic behind a proxy rejects a conversation containing tool calls
@@ -169,11 +201,38 @@ func applyTools(req *request, model *ai.Model, c ai.Context, cm compat) {
 	if hasToolHistory(c.Messages) {
 		req.Tools = &[]tool{}
 	}
+	return nil
 }
 
-func convertTools(tools []ai.Tool, cm compat) []tool {
+func convertTools(tools []ai.Tool, cm compat) ([]tool, error) {
 	out := make([]tool, 0, len(tools))
 	for _, t := range tools {
+		// A grammar tool is declared as a different KIND of tool, not a
+		// function with extra fields: it takes no JSON schema at all, because
+		// the grammar is the schema.
+		grammar, err := apishared.ResolveGrammarConstrainedSampling(t, cm.SupportsOpenAIGrammarTools)
+		if err != nil {
+			return nil, err
+		}
+		if grammar != nil {
+			out = append(out, tool{
+				Type: "custom",
+				Custom: &toolCustom{
+					Name:        t.Name,
+					Description: t.Description,
+					Format: &customFormat{
+						Type:    "grammar",
+						Grammar: &grammarFormat{Syntax: grammar.Format, Definition: grammar.Definition},
+					},
+				},
+			})
+			continue
+		}
+
+		strict, err := apishared.ResolveJSONSchemaStrictSampling(t, cm.SupportsStrictMode)
+		if err != nil {
+			return nil, err
+		}
 		converted := tool{
 			Type: "function",
 			Function: &toolFunc{
@@ -183,14 +242,15 @@ func convertTools(tools []ai.Tool, cm compat) []tool {
 			},
 		}
 		// `strict` is not universally understood, and providers that do not
-		// know it reject the whole request rather than ignoring the field.
+		// know it reject the whole request rather than ignoring the field. Where
+		// it IS understood the field is always sent, false by default, so a tool
+		// that asked for schema enforcement is the only one that gets it.
 		if cm.SupportsStrictMode {
-			strict := false
 			converted.Function.Strict = &strict
 		}
 		out = append(out, converted)
 	}
-	return out
+	return out, nil
 }
 
 func hasToolHistory(msgs ai.MessageList) bool {

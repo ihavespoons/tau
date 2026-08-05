@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ihavespoons/tau/ai"
+	"github.com/ihavespoons/tau/ai/api/apishared"
 )
 
 func codexModel(baseURL string) *ai.Model {
@@ -65,12 +66,19 @@ func TestCodexAccountIDFromToken(t *testing.T) {
 	}
 }
 
-// THE POINT: the system prompt travels in `instructions`. Sent as a message it
-// is accepted and then ignored, which reads as the model disregarding it — and
-// sending it in both places pays for the largest item in the request twice.
-func TestCodexSystemPromptGoesInInstructions(t *testing.T) {
-	raw, err := json.Marshal(buildCodexRequest(codexModel(""), simpleContext(),
-		&CodexOptions{}, resolveCodexCompat(codexModel(""))))
+// codexPayload renders a codex request the way the backend would see it.
+func codexPayload(t *testing.T, model *ai.Model, c ai.Context, opts *CodexOptions) map[string]any {
+	t.Helper()
+	cm := resolveCodexCompat(model)
+	grammar, err := apishared.GrammarToolInputProperties(c.Tools, cm.SupportsOpenAIGrammarTools)
+	if err != nil {
+		t.Fatalf("resolving grammar tools: %v", err)
+	}
+	req, err := buildCodexRequest(model, c, opts, cm, grammar)
+	if err != nil {
+		t.Fatalf("building request: %v", err)
+	}
+	raw, err := json.Marshal(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +86,14 @@ func TestCodexSystemPromptGoesInInstructions(t *testing.T) {
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		t.Fatal(err)
 	}
+	return payload
+}
+
+// THE POINT: the system prompt travels in `instructions`. Sent as a message it
+// is accepted and then ignored, which reads as the model disregarding it — and
+// sending it in both places pays for the largest item in the request twice.
+func TestCodexSystemPromptGoesInInstructions(t *testing.T) {
+	payload := codexPayload(t, codexModel(""), simpleContext(), &CodexOptions{})
 
 	if payload["instructions"] != "be helpful" {
 		t.Errorf("instructions: %v", payload["instructions"])
@@ -95,9 +111,7 @@ func TestCodexAlwaysSendsInstructions(t *testing.T) {
 	c := simpleContext()
 	c.SystemPrompt = ""
 
-	raw, _ := json.Marshal(buildCodexRequest(codexModel(""), c, &CodexOptions{}, resolveCodexCompat(codexModel(""))))
-	var payload map[string]any
-	_ = json.Unmarshal(raw, &payload)
+	payload := codexPayload(t, codexModel(""), c, &CodexOptions{})
 
 	if payload["instructions"] != defaultInstructions {
 		t.Errorf("instructions: %v", payload["instructions"])
@@ -109,9 +123,7 @@ func TestCodexAlwaysSendsInstructions(t *testing.T) {
 // payload is always requested, not only when reasoning was asked for.
 func TestCodexAlwaysRequestsEncryptedReasoning(t *testing.T) {
 	for _, opts := range []*CodexOptions{{}, {Options: Options{Reasoning: "high"}}} {
-		raw, _ := json.Marshal(buildCodexRequest(codexModel(""), simpleContext(), opts, resolveCodexCompat(codexModel(""))))
-		var payload map[string]any
-		_ = json.Unmarshal(raw, &payload)
+		payload := codexPayload(t, codexModel(""), simpleContext(), opts)
 
 		include, _ := payload["include"].([]any)
 		if len(include) != 1 || include[0] != "reasoning.encrypted_content" {

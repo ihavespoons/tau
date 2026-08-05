@@ -81,7 +81,20 @@ func runAzure(ctx context.Context, stream *ai.MessageStream, model *ai.Model, c 
 	}
 
 	cm := resolveAzureCompat(model)
-	req := buildRequest(model, c, &opts.Options, cm)
+	// Which tools are grammar tools is decided once, from the tool definitions.
+	// Both the request and the RESPONSE need it: a replayed call carries only a
+	// name and arguments, and a streamed custom tool call carries only a name
+	// and raw text — neither says which argument that text belongs in.
+	grammar, err := apishared.GrammarToolInputProperties(c.Tools, cm.SupportsOpenAIGrammarTools)
+	if err != nil {
+		fail(stream, out, ctx, err)
+		return
+	}
+	req, err := buildRequest(model, c, &opts.Options, cm, grammar)
+	if err != nil {
+		fail(stream, out, ctx, err)
+		return
+	}
 	// A deployment is addressed by its own name, which need not match the
 	// model id — the same model can be deployed twice under different names.
 	req.Model = azureDeployment(model, opts)
@@ -90,13 +103,17 @@ func runAzure(ctx context.Context, stream *ai.MessageStream, model *ai.Model, c 
 	req.PromptCacheRetention = ""
 	req.PromptCacheOptions = nil
 
-	body, err := encodePayload(req, model, &opts.Options)
-	if err != nil {
+	body, err2 := encodePayload(req, model, &opts.Options)
+	if err = err2; err != nil {
 		fail(stream, out, ctx, err)
 		return
 	}
 
-	resp, err := doAzureRequest(ctx, endpoint, model, opts, body)
+	// Retried on the same policy every other wire uses: a 429 or a 5xx from a
+	// gateway is routine, and without this one costs the whole turn.
+	resp, err := apishared.RetryRequest(ctx, func() (*http.Response, error) {
+		return doAzureRequest(ctx, endpoint, model, opts, body)
+	}, opts.MaxRetries, opts.MaxRetryDelayMs)
 	if err != nil {
 		fail(stream, out, ctx, err)
 		return
@@ -116,7 +133,7 @@ func runAzure(ctx context.Context, stream *ai.MessageStream, model *ai.Model, c 
 
 	stream.Push(ai.Event{Type: ai.EventStart, Partial: out})
 
-	if err := consume(ctx, resp.Body, stream, out, model, &opts.Options); err != nil {
+	if err := consume(ctx, resp.Body, stream, out, model, &opts.Options, grammar); err != nil {
 		fail(stream, out, ctx, err)
 		return
 	}

@@ -47,9 +47,19 @@ type tool struct {
 	Description string             `json:"description,omitempty"`
 	Parameters  *jsonschema.Schema `json:"parameters,omitempty"`
 	Strict      *bool              `json:"strict,omitempty"`
+	// Format declares a custom tool's grammar. A tool has a schema or a
+	// format, never both.
+	Format *toolFormat `json:"format,omitempty"`
 	// DeferLoading marks a tool the model may search for rather than one
 	// offered up front.
 	DeferLoading bool `json:"defer_loading,omitempty"`
+}
+
+type toolFormat struct {
+	Type string `json:"type"`
+	// Syntax is "lark" or "regex".
+	Syntax     string `json:"syntax"`
+	Definition string `json:"definition"`
 }
 
 // minOutputTokens is the floor the endpoint enforces; a smaller value is
@@ -57,7 +67,15 @@ type tool struct {
 const minOutputTokens = 16
 
 // buildRequest assembles the payload for one turn.
-func buildRequest(model *ai.Model, c ai.Context, opts *Options, cm compat) request {
+//
+// grammar maps a tool name to the argument carrying its raw output, for the
+// tools declared with a grammar. It is resolved by the caller because the
+// streaming side needs the same answer.
+//
+// It can fail: a tool may require constrained sampling this host cannot honour,
+// and sending the request anyway would let the model answer in a shape the tool
+// has been told it will never receive.
+func buildRequest(model *ai.Model, c ai.Context, opts *Options, cm compat, grammar map[string]string) (request, error) {
 	retention := resolveCacheRetention(opts.CacheRetention, opts.Env)
 
 	immediate, deferredTools := apishared.SplitDeferredTools(c, cm.SupportsToolSearch, nil)
@@ -66,9 +84,14 @@ func buildRequest(model *ai.Model, c ai.Context, opts *Options, cm compat) reque
 		deferred[t.Name] = t
 	}
 
+	input, err := convertMessages(model, c, cm, deferred, grammar)
+	if err != nil {
+		return request{}, err
+	}
+
 	req := request{
 		Model:  model.ID,
-		Input:  convertMessages(model, c, cm, deferred),
+		Input:  input,
 		Stream: true,
 		Store:  false,
 	}
@@ -95,14 +118,18 @@ func buildRequest(model *ai.Model, c ai.Context, opts *Options, cm compat) reque
 		req.ServiceTier = opts.ServiceTier
 	}
 	if len(immediate) > 0 {
-		req.Tools = convertTools(immediate, cm, false)
+		tools, err := convertTools(immediate, cm, false)
+		if err != nil {
+			return request{}, err
+		}
+		req.Tools = tools
 	}
 	if opts.ToolChoice != nil {
 		req.ToolChoice = opts.ToolChoice
 	}
 
 	applyReasoning(&req, model, opts)
-	return req
+	return req, nil
 }
 
 // applyReasoning sets the thinking request and asks for the encrypted payload
@@ -184,9 +211,30 @@ func offValue(model *ai.Model) (string, bool) {
 	return *mapped, true
 }
 
-func convertTools(tools []ai.Tool, cm compat, deferLoading bool) []tool {
+func convertTools(tools []ai.Tool, cm compat, deferLoading bool) ([]tool, error) {
 	out := make([]tool, 0, len(tools))
 	for _, t := range tools {
+		// A grammar tool is declared as a different KIND of tool: no JSON
+		// schema at all, because the grammar is the schema.
+		grammar, err := apishared.ResolveGrammarConstrainedSampling(t, cm.SupportsOpenAIGrammarTools)
+		if err != nil {
+			return nil, err
+		}
+		if grammar != nil {
+			out = append(out, tool{
+				Type: "custom", Name: t.Name, Description: t.Description,
+				Format: &toolFormat{
+					Type: "grammar", Syntax: grammar.Format, Definition: grammar.Definition,
+				},
+				DeferLoading: deferLoading,
+			})
+			continue
+		}
+
+		strict, err := apishared.ResolveJSONSchemaStrictSampling(t, cm.SupportsStrictMode)
+		if err != nil {
+			return nil, err
+		}
 		converted := tool{
 			Type:         "function",
 			Name:         t.Name,
@@ -195,14 +243,15 @@ func convertTools(tools []ai.Tool, cm compat, deferLoading bool) []tool {
 			DeferLoading: deferLoading,
 		}
 		// `strict` is not universally understood, and a host that does not know
-		// it rejects the request rather than ignoring the field.
+		// it rejects the request rather than ignoring the field. Where it IS
+		// understood the field is always sent, false by default, so a tool that
+		// asked for schema enforcement is the only one that gets it.
 		if cm.SupportsStrictMode {
-			strict := false
 			converted.Strict = &strict
 		}
 		out = append(out, converted)
 	}
-	return out
+	return out, nil
 }
 
 // maxPromptCacheKey is OpenAI's documented limit.

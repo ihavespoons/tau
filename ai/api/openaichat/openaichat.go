@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ihavespoons/tau/ai"
+	"github.com/ihavespoons/tau/ai/api/apishared"
 	"github.com/ihavespoons/tau/ai/internal/sse"
 	"github.com/ihavespoons/tau/ai/partialjson"
 )
@@ -85,6 +86,15 @@ type liveBlock struct {
 	partialJSON string
 	args        map[string]any
 	thought     string
+	// grammar is set for a custom (grammar-constrained) tool call, whose input
+	// arrives as raw text rather than as JSON arguments.
+	grammar *grammarInput
+}
+
+// grammarInput re-wraps a grammar tool's streamed text as JSON-argument deltas.
+type grammarInput struct {
+	property string
+	buffer   apishared.GrammarInputBuffer
 }
 
 func (b *liveBlock) materialize() ai.Content {
@@ -143,7 +153,21 @@ func run(ctx context.Context, stream *ai.MessageStream, model *ai.Model, c ai.Co
 	}
 
 	cm := resolveCompat(model)
-	req := buildRequest(model, c, opts, cm)
+
+	// Which tools are grammar tools is decided once, from the tool definitions.
+	// Both the request and the RESPONSE need it: a replayed call carries only a
+	// name and arguments, and a streamed custom tool call carries only a name
+	// and raw text — neither says which argument that text belongs in.
+	grammar, err := apishared.GrammarToolInputProperties(c.Tools, cm.SupportsOpenAIGrammarTools)
+	if err != nil {
+		fail(err)
+		return
+	}
+	req, err := buildRequest(model, c, opts, cm, grammar)
+	if err != nil {
+		fail(err)
+		return
+	}
 
 	var payload any = req
 	if opts.OnPayload != nil {
@@ -163,8 +187,15 @@ func run(ctx context.Context, stream *ai.MessageStream, model *ai.Model, c ai.Co
 		return
 	}
 
-	resp, err := doRequest(ctx, model, buildHeaders(model, opts, cm), body, opts)
+	// Retried on the same policy every other wire uses: a 429 or a 5xx from a
+	// gateway is routine, and without this one costs the whole turn.
+	resp, err := apishared.RetryRequest(ctx, func() (*http.Response, error) {
+		return doRequest(ctx, model, buildHeaders(model, c, opts, cm), body, opts)
+	}, opts.MaxRetries, opts.MaxRetryDelayMs)
 	if err != nil {
+		if ctx.Err() != nil {
+			err = fmt.Errorf("Request was aborted") //nolint:staticcheck // Pi error-message parity
+		}
 		fail(err)
 		return
 	}
@@ -182,7 +213,7 @@ func run(ctx context.Context, stream *ai.MessageStream, model *ai.Model, c ai.Co
 	}
 
 	stream.Push(ai.Event{Type: ai.EventStart, Partial: output})
-	consume(ctx, stream, resp.Body, model, output, fail)
+	consume(ctx, stream, resp.Body, model, output, grammar, fail)
 }
 
 // state is the accumulator for one streamed response.
@@ -204,7 +235,7 @@ type state struct {
 	hasFinishReason bool
 }
 
-func consume(ctx context.Context, stream *ai.MessageStream, body io.Reader, model *ai.Model, output *ai.AssistantMessage, fail func(error)) {
+func consume(ctx context.Context, stream *ai.MessageStream, body io.Reader, model *ai.Model, output *ai.AssistantMessage, grammar map[string]string, fail func(error)) {
 	st := &state{
 		byIndex:         map[int]*liveBlock{},
 		byID:            map[string]*liveBlock{},
@@ -321,12 +352,13 @@ func consume(ctx context.Context, stream *ai.MessageStream, body io.Reader, mode
 		}
 
 		for _, tc := range d.ToolCalls {
-			block, isNew := st.ensureToolCall(tc)
+			block, isNew := st.ensureToolCall(tc, grammar)
 			if isNew {
 				idx := add(block)
 				stream.Push(ai.Event{Type: ai.EventToolCallStart, ContentIndex: idx, Partial: output})
 			}
-			if tc.Function != nil && tc.Function.Arguments != "" {
+			switch {
+			case tc.Function != nil && tc.Function.Arguments != "":
 				block.partialJSON += tc.Function.Arguments
 				block.args = partialjson.ParseStreaming(block.partialJSON)
 				idx := sync(block)
@@ -334,6 +366,23 @@ func consume(ctx context.Context, stream *ai.MessageStream, body io.Reader, mode
 					Type: ai.EventToolCallDelta, ContentIndex: idx,
 					Delta: tc.Function.Arguments, Partial: output,
 				})
+
+			case tc.Custom != nil && tc.Custom.Input != "" && block.grammar != nil:
+				// The provider streams the grammar output as plain text; the
+				// delta emitted is the JSON it would have been, so consumers
+				// downstream see one shape of tool call, not two.
+				delta, err := block.appendGrammarInput(block.grammar.buffer.Input()+tc.Custom.Input, false)
+				if err != nil {
+					fail(err)
+					return
+				}
+				idx := sync(block)
+				if delta != "" {
+					stream.Push(ai.Event{
+						Type: ai.EventToolCallDelta, ContentIndex: idx,
+						Delta: delta, Partial: output,
+					})
+				}
 			}
 		}
 
@@ -342,6 +391,21 @@ func consume(ctx context.Context, stream *ai.MessageStream, body io.Reader, mode
 
 	// Close every block that is still open.
 	for _, b := range st.blocks {
+		// A grammar call's arguments are only valid JSON once closed: the
+		// closing quote and brace are written here, not by the provider.
+		if b.kind == "toolCall" && b.grammar != nil {
+			delta, err := b.appendGrammarInput(b.grammar.buffer.Input(), true)
+			if err != nil {
+				fail(err)
+				return
+			}
+			if delta != "" {
+				stream.Push(ai.Event{
+					Type: ai.EventToolCallDelta, ContentIndex: sync(b),
+					Delta: delta, Partial: output,
+				})
+			}
+		}
 		idx := sync(b)
 		switch b.kind {
 		case "text":
@@ -374,8 +438,19 @@ func consume(ctx context.Context, stream *ai.MessageStream, body io.Reader, mode
 	stream.Push(ai.Event{Type: ai.EventDone, Reason: output.StopReason, Message: output})
 }
 
+// appendGrammarInput advances the block's grammar buffer and mirrors the text
+// into its arguments, so the partial call is coherent at every delta.
+func (b *liveBlock) appendGrammarInput(nextInput string, close bool) (string, error) {
+	delta, err := b.grammar.buffer.AppendJSONDelta(b.grammar.property, nextInput, close)
+	if err != nil {
+		return "", err
+	}
+	b.args = map[string]any{b.grammar.property: nextInput}
+	return delta, nil
+}
+
 // ensureToolCall finds or creates the block a tool-call delta belongs to.
-func (s *state) ensureToolCall(tc *toolCallDelta) (*liveBlock, bool) {
+func (s *state) ensureToolCall(tc *toolCallDelta, grammar map[string]string) (*liveBlock, bool) {
 	var block *liveBlock
 	if tc.Index != nil {
 		block = s.byIndex[*tc.Index]
@@ -384,10 +459,7 @@ func (s *state) ensureToolCall(tc *toolCallDelta) (*liveBlock, bool) {
 		block = s.byID[tc.ID]
 	}
 
-	name := ""
-	if tc.Function != nil {
-		name = tc.Function.Name
-	}
+	name := tc.name()
 
 	isNew := false
 	if block == nil {
@@ -402,6 +474,23 @@ func (s *state) ensureToolCall(tc *toolCallDelta) (*liveBlock, bool) {
 			block.toolID = tc.ID
 		}
 		s.byID[tc.ID] = block
+	}
+	// The custom shape may only be revealed on a later chunk than the one that
+	// opened the block, so the buffer is attached whenever it first appears.
+	if tc.Custom != nil && block.grammar == nil {
+		// The fallback is for a tool tau never declared: the model invented a
+		// custom call, and its output still needs somewhere to live rather than
+		// being dropped on the floor.
+		property := grammar[block.toolName]
+		if property == "" {
+			property = grammar[name]
+		}
+		if property == "" {
+			property = "input"
+		}
+		block.grammar = &grammarInput{property: property}
+		block.args = map[string]any{property: ""}
+		block.partialJSON = ""
 	}
 	if block.toolName == "" && name != "" {
 		block.toolName = name

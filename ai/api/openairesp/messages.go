@@ -25,6 +25,9 @@ type item struct {
 
 	CallID string `json:"call_id,omitempty"`
 	Name   string `json:"name,omitempty"`
+	// Input carries a grammar tool's raw output. It is a separate field from
+	// Arguments because the wire uses a different item type for it entirely.
+	Input string `json:"input,omitempty"`
 	// Arguments is a JSON STRING on a function call and an OBJECT on a tool
 	// search. The wire is inconsistent about it, so the field is untyped.
 	Arguments any `json:"arguments,omitempty"`
@@ -160,7 +163,11 @@ func normalizeToolCallID(id string, source ai.AssistantMessage, model *ai.Model)
 }
 
 // convertMessages turns tau's transcript into the `input` array.
-func convertMessages(model *ai.Model, c ai.Context, cm compat, deferred map[string]ai.Tool) []item {
+// convertMessages renders the transcript. grammar maps a tool name to the
+// argument carrying its raw output, for the tools declared with a grammar; a
+// call to one of those, and its result, use the custom_tool_call items rather
+// than the function_call ones.
+func convertMessages(model *ai.Model, c ai.Context, cm compat, deferred map[string]ai.Tool, grammar map[string]string) ([]item, error) {
 	var out []item
 
 	normalize := func(id string, source ai.AssistantMessage) string {
@@ -184,13 +191,21 @@ func convertMessages(model *ai.Model, c ai.Context, cm compat, deferred map[stri
 				out = append(out, converted)
 			}
 		case ai.AssistantMessage:
-			out = append(out, convertAssistant(m, model, msgIndex)...)
+			converted, err := convertAssistant(m, model, msgIndex, grammar)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, converted...)
 		case ai.ToolResultMessage:
-			out = append(out, convertToolResult(m, model))
-			out = append(out, loadDeferredTools(m, deferred, loaded, cm)...)
+			out = append(out, convertToolResult(m, model, grammar))
+			loadedItems, err := loadDeferredTools(m, deferred, loaded, cm)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, loadedItems...)
 		}
 	}
-	return out
+	return out, nil
 }
 
 func convertUser(m ai.UserMessage) (item, bool) {
@@ -220,7 +235,7 @@ func dataURL(img ai.ImageContent) string {
 }
 
 // convertAssistant expands one assistant turn into its output items.
-func convertAssistant(m ai.AssistantMessage, model *ai.Model, msgIndex int) []item {
+func convertAssistant(m ai.AssistantMessage, model *ai.Model, msgIndex int, grammar map[string]string) ([]item, error) {
 	// A turn from a different model of the SAME provider and API is the awkward
 	// case: its ids are real ids the endpoint issued, but for another model, so
 	// the reasoning-pairing validation would reject them. Dropping the item id
@@ -260,6 +275,22 @@ func convertAssistant(m ai.AssistantMessage, model *ai.Model, msgIndex int) []it
 
 		case ai.ToolCall:
 			callID, itemID := splitToolCallID(b.ID)
+			if property, isGrammar := grammar[b.Name]; isGrammar {
+				input, err := apishared.GrammarToolInput(b.Name, b.Arguments, property)
+				if err != nil {
+					return nil, err
+				}
+				// A custom-tool item id is ctc_, not fc_, so an id from any
+				// other shape is dropped rather than replayed as a mismatch.
+				if differentModel || !strings.HasPrefix(itemID, "ctc_") {
+					itemID = ""
+				}
+				out = append(out, item{
+					Type: "custom_tool_call", ID: itemID, CallID: callID,
+					Name: b.Name, Input: apishared.SanitizeSurrogates(input),
+				})
+				continue
+			}
 			// Only an fc_ id is a real function-call item; anything else came
 			// from a wire that names them differently and must not be replayed
 			// as one.
@@ -276,7 +307,7 @@ func convertAssistant(m ai.AssistantMessage, model *ai.Model, msgIndex int) []it
 			})
 		}
 	}
-	return out
+	return out, nil
 }
 
 func splitToolCallID(id string) (callID, itemID string) {
@@ -286,8 +317,14 @@ func splitToolCallID(id string) (callID, itemID string) {
 	return id, ""
 }
 
-func convertToolResult(m ai.ToolResultMessage, model *ai.Model) item {
+func convertToolResult(m ai.ToolResultMessage, model *ai.Model, grammar map[string]string) item {
 	callID, _ := splitToolCallID(m.ToolCallID)
+	// The result of a grammar call must be paired with the item type the call
+	// used. Sending a function_call_output for a custom_tool_call leaves the
+	// call unanswered as far as the host is concerned.
+	if _, isGrammar := grammar[m.ToolName]; isGrammar {
+		return item{Type: "custom_tool_call_output", CallID: callID, Output: toolResultOutput(m, model)}
+	}
 	return item{Type: "function_call_output", CallID: callID, Output: toolResultOutput(m, model)}
 }
 
@@ -335,9 +372,9 @@ func toolResultOutput(m ai.ToolResultMessage, model *ai.Model) any {
 // result introduced them. Replaying the search call and its output is what
 // tells the model those tools exist on this turn — without it the model would
 // see itself calling a tool it was never offered.
-func loadDeferredTools(m ai.ToolResultMessage, deferred map[string]ai.Tool, loaded map[string]bool, cm compat) []item {
+func loadDeferredTools(m ai.ToolResultMessage, deferred map[string]ai.Tool, loaded map[string]bool, cm compat) ([]item, error) {
 	if len(deferred) == 0 || len(m.AddedToolNames) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	var tools []ai.Tool
@@ -352,7 +389,12 @@ func loadDeferredTools(m ai.ToolResultMessage, deferred map[string]ai.Tool, load
 		names = append(names, name)
 	}
 	if len(tools) == 0 {
-		return nil
+		return nil, nil
+	}
+
+	converted, err := convertTools(tools, cm, true)
+	if err != nil {
+		return nil, err
 	}
 
 	searchID := "tau_tool_load_" + shortHash(m.ToolCallID+":"+strings.Join(names, ","))
@@ -365,7 +407,7 @@ func loadDeferredTools(m ai.ToolResultMessage, deferred map[string]ai.Tool, load
 		{
 			Type: "tool_search_output", CallID: searchID,
 			Status: "completed", Execution: "client",
-			Tools: convertTools(tools, cm, true),
+			Tools: converted,
 		},
-	}
+	}, nil
 }
