@@ -207,6 +207,14 @@ func (s *Session) replaceSession(ctx context.Context, open func() (*session.Sess
 	s.sessionID = meta.ID
 	s.Agent.SetMessages(restored)
 
+	// Out-of-process extensions keep running across a session switch: their
+	// per-session state is set up in the factory, and respawning would tear
+	// down every long-lived connection they hold for what is, to them, a
+	// change of subject. The generation bump is what makes the old session's
+	// answers stop counting.
+	if s.opts.ExternalExtensions != nil {
+		s.opts.ExternalExtensions.Invalidate()
+	}
 	if s.Extensions != nil {
 		// Handlers holding a context from the previous session must fail
 		// loudly rather than mutate the new one.
@@ -352,6 +360,30 @@ func (c extensionCommand) Complete(prefix string) []slashcmd.Item {
 
 // codingHost serves the built-in commands that need no UI.
 type codingHost struct{ s *Session }
+
+// Reload restarts the out-of-process extensions.
+//
+// It reports what came back rather than a bare acknowledgement: the reason to
+// run /reload is that an extension was edited, and the thing worth knowing is
+// whether the new code loaded.
+func (h codingHost) Reload(ctx context.Context) (string, error) {
+	before := len(h.s.Warnings)
+	if err := h.s.ReloadExtensions(ctx); err != nil {
+		return "", err
+	}
+
+	var b strings.Builder
+	names := h.s.ExtensionNames()
+	if len(names) == 0 {
+		b.WriteString("Reloaded. No extensions are loaded.")
+	} else {
+		fmt.Fprintf(&b, "Reloaded %d extension(s): %s", len(names), strings.Join(names, ", "))
+	}
+	for _, w := range h.s.Warnings[before:] {
+		b.WriteString("\n  " + w)
+	}
+	return b.String(), nil
+}
 
 func (h codingHost) Models() []string {
 	ms := h.s.AvailableModels()

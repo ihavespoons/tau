@@ -15,6 +15,11 @@ jobs:
           go-version: "1.25"
       - run: go build ./...
       - run: go vet ./...
+      # The protocol's TypeScript declarations are generated from the Go types
+      # that define it. A change to one without the other makes tau and the npm
+      # host shim disagree, with nothing failing to compile on either side.
+      - name: check generated protocol declarations
+        run: go run ./cmd/gen-wire-ts -check
       - run: go test ./...
 
   lint:

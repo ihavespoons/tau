@@ -90,6 +90,7 @@ func TestRegistryLookupMissing(t *testing.T) {
 }
 
 type stubHost struct {
+	reloads   int
 	models    []string
 	current   string
 	named     string
@@ -128,6 +129,11 @@ func (h *stubHost) MoveTo(_ context.Context, entryID string) (string, error) {
 	h.movedTo = entryID
 	return "moved", nil
 }
+func (h *stubHost) Reload(context.Context) (string, error) {
+	h.reloads++
+	return "reloaded", nil
+}
+
 func (h *stubHost) ForkSession(_ context.Context, entryID string) (string, error) {
 	h.forkedAt = entryID
 	h.forkCalls++

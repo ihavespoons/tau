@@ -82,7 +82,9 @@ func printMode(args []string) error {
 		mode      = fs.String("mode", "text", "output mode: text|json")
 		approve   = fs.Bool("approve", false, "trust this project's .tau resources")
 		noApprove = fs.Bool("no-approve", false, "do not trust this project's .tau resources")
+		exts      repeatedFlag
 	)
+	fs.Var(&exts, "e", "load an extension from this path (repeatable)")
 	fs.BoolVar(print, "p", false, "print mode (non-interactive)")
 	fs.BoolVar(cont, "c", false, "continue the most recent session")
 	fs.Usage = func() {
@@ -93,6 +95,7 @@ usage:
   tau -c                 continue the most recent session here
   tau -p "prompt"        run the agent (non-interactive)
   tau -p -c "prompt"     continue the most recent session here
+  tau -e ./my-ext.ts     load an extension (repeatable)
   tau login [provider]   log in (default: anthropic; an unknown name lists the rest)
   tau login -k           store an API key instead
   tau logout [provider]  remove stored credentials
@@ -150,6 +153,8 @@ flags:
 			SessionPath:   *sessPath,
 			TrustOverride: trustOverride,
 			Extensions:    bundledExtensions(),
+
+			ExternalExtensions: newSubprocessLoader(exts),
 		}})
 	}
 
@@ -169,6 +174,8 @@ flags:
 		Mode:          extMode,
 		TrustOverride: trustOverride,
 		Extensions:    bundledExtensions(),
+
+		ExternalExtensions: newSubprocessLoader(exts),
 	})
 	if err != nil {
 		return err

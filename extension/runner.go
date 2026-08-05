@@ -733,3 +733,14 @@ func (r *Runner) EmitInput(ctx context.Context, text string, images []ai.ImageCo
 	}
 	return &InputResult{Action: InputTransform, Text: curText, Images: curImages}
 }
+
+// Names lists the loaded extensions in load order.
+func (r *Runner) Names() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, 0, len(r.apis))
+	for _, a := range r.apis {
+		out = append(out, a.name)
+	}
+	return out
+}

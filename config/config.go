@@ -82,6 +82,13 @@ func ProjectSettingsPath(cwd string) string {
 	return filepath.Join(ProjectDir(cwd), "settings.json")
 }
 
+// ProjectExtensionsDir is the project-local extension directory. Reading it is
+// gated on the project being trusted: cloning a repository must not be enough
+// to make tau launch what it contains.
+func ProjectExtensionsDir(cwd string) string {
+	return filepath.Join(ProjectDir(cwd), "extensions")
+}
+
 // PiAgentDir returns Pi's global agent directory, for the interop importer.
 func PiAgentDir() string {
 	if v := os.Getenv("PI_CODING_AGENT_DIR"); v != "" {

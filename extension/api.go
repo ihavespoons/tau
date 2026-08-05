@@ -52,8 +52,8 @@ type (
 	ProjectTrustHandler      func(context.Context, *ProjectTrustEvent, *Context) (*ProjectTrustResult, error)
 	ResourcesDiscoverHandler func(context.Context, *ResourcesDiscoverEvent, *Context) (*ResourcesDiscoverResult, error)
 
-	SessionStartHandler       func(context.Context, *SessionStartEvent, *Context) error
-	SessionInfoChangedHandler func(context.Context, *SessionInfoChangedEvent, *Context) error
+	SessionStartHandler         func(context.Context, *SessionStartEvent, *Context) error
+	SessionInfoChangedHandler   func(context.Context, *SessionInfoChangedEvent, *Context) error
 	SessionBeforeSwitchHandler  func(context.Context, *SessionBeforeSwitchEvent, *Context) (*SessionBeforeResult, error)
 	SessionBeforeForkHandler    func(context.Context, *SessionBeforeForkEvent, *Context) (*SessionBeforeResult, error)
 	SessionBeforeCompactHandler func(context.Context, *SessionBeforeCompactEvent, *Context) (*SessionBeforeResult, error)
@@ -197,7 +197,7 @@ func (a *API) Subscribed(t EventType) bool {
 func (a *API) OnProjectTrust(h ProjectTrustHandler)           { a.on(EventProjectTrust, h) }
 func (a *API) OnResourcesDiscover(h ResourcesDiscoverHandler) { a.on(EventResourcesDiscover, h) }
 
-func (a *API) OnSessionStart(h SessionStartHandler)       { a.on(EventSessionStart, h) }
+func (a *API) OnSessionStart(h SessionStartHandler) { a.on(EventSessionStart, h) }
 func (a *API) OnSessionInfoChanged(h SessionInfoChangedHandler) {
 	a.on(EventSessionInfoChanged, h)
 }
@@ -393,4 +393,58 @@ func (a *API) SetActiveTools(names []string) error {
 		return err
 	}
 	return rt.SetActiveTools(names)
+}
+
+// SessionName returns the session's name, empty if it has none.
+func (a *API) SessionName() string {
+	rt, err := a.runtimeOrErr()
+	if err != nil {
+		return ""
+	}
+	return rt.SessionName()
+}
+
+// ActiveToolNames lists the tools currently available to the model.
+func (a *API) ActiveToolNames() []string {
+	rt, err := a.runtimeOrErr()
+	if err != nil {
+		return nil
+	}
+	return rt.ActiveToolNames()
+}
+
+// Model returns the active model, nil before the host binds a runtime.
+func (a *API) Model() *ai.Model {
+	rt, err := a.runtimeOrErr()
+	if err != nil {
+		return nil
+	}
+	return rt.Model()
+}
+
+// SetModel switches the active model.
+func (a *API) SetModel(m *ai.Model) error {
+	rt, err := a.runtimeOrErr()
+	if err != nil {
+		return err
+	}
+	return rt.SetModel(m)
+}
+
+// ThinkingLevel returns the active reasoning level.
+func (a *API) ThinkingLevel() ai.ModelThinkingLevel {
+	rt, err := a.runtimeOrErr()
+	if err != nil {
+		return ""
+	}
+	return rt.ThinkingLevel()
+}
+
+// SetThinkingLevel changes the reasoning level.
+func (a *API) SetThinkingLevel(l ai.ModelThinkingLevel) error {
+	rt, err := a.runtimeOrErr()
+	if err != nil {
+		return err
+	}
+	return rt.SetThinkingLevel(l)
 }

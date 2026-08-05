@@ -19,7 +19,7 @@ import (
 type EventType string
 
 const (
-	EventProjectTrust     EventType = "project_trust"
+	EventProjectTrust      EventType = "project_trust"
 	EventResourcesDiscover EventType = "resources_discover"
 
 	EventSessionStart         EventType = "session_start"
@@ -221,9 +221,9 @@ type AfterProviderResponseEvent struct {
 // BeforeAgentStartEvent precedes a run and can inject messages or replace the
 // system prompt.
 type BeforeAgentStartEvent struct {
-	Prompt       string           `json:"prompt"`
+	Prompt       string            `json:"prompt"`
 	Images       []ai.ImageContent `json:"images,omitempty"`
-	SystemPrompt string           `json:"systemPrompt"`
+	SystemPrompt string            `json:"systemPrompt"`
 }
 
 // BeforeAgentStartResult injects a message and/or replaces the system prompt.
@@ -294,10 +294,10 @@ type ToolExecutionStartEvent struct {
 
 // ToolExecutionUpdateEvent carries a streamed partial result.
 type ToolExecutionUpdateEvent struct {
-	ToolCallID    string             `json:"toolCallId"`
-	ToolName      string             `json:"toolName"`
-	Args          map[string]any     `json:"args,omitempty"`
-	PartialResult *agent.ToolResult  `json:"partialResult,omitempty"`
+	ToolCallID    string            `json:"toolCallId"`
+	ToolName      string            `json:"toolName"`
+	Args          map[string]any    `json:"args,omitempty"`
+	PartialResult *agent.ToolResult `json:"partialResult,omitempty"`
 }
 
 // ToolExecutionEndEvent fires when a tool finishes.
@@ -312,9 +312,9 @@ type ToolExecutionEndEvent struct {
 // mutable: writing to it patches the arguments the tool receives, and later
 // handlers observe earlier edits.
 type ToolCallEvent struct {
-	ToolCallID string         `json:"toolCallId"`
-	ToolName   string         `json:"toolName"`
-	Args       map[string]any `json:"args"`
+	ToolCallID string          `json:"toolCallId"`
+	ToolName   string          `json:"toolName"`
+	Args       map[string]any  `json:"args"`
 	Raw        json.RawMessage `json:"-"`
 }
 

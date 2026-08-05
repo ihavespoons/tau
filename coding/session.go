@@ -47,6 +47,9 @@ type Options struct {
 	TrustOverride *bool
 	// Extensions are loaded before the session starts, in order.
 	Extensions []extension.Extension
+	// ExternalExtensions discovers and launches extensions that live outside
+	// the binary. Nil loads only the ones compiled in.
+	ExternalExtensions ExtensionLoader
 	// Mode is reported to extensions so they can degrade gracefully.
 	Mode extension.Mode
 	// Resume opens the most recent session for Cwd instead of creating one.
@@ -90,10 +93,14 @@ type Session struct {
 	// mu guards allTools, which an extension may mutate from its own
 	// goroutine long after startup.
 	mu sync.Mutex
+	// builtinTools is the set tau itself provides, kept so a reload can
+	// rebuild the tool list from a known base instead of unpicking what an
+	// extension added.
+	builtinTools []agent.Tool
 	// allTools is the full registered set, including tools an extension has
 	// deactivated — SetActiveTools selects from here.
 	allTools []agent.Tool
-	repo session.Repo
+	repo     session.Repo
 	// sessionID identifies the conversation to providers that key a cache or
 	// a backend affinity off it. It tracks Session across switches, so it is
 	// kept here rather than read back from disk per request.
@@ -247,11 +254,21 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 	if mode == "" {
 		mode = extension.ModePrint
 	}
-	if len(opts.Extensions) > 0 {
+	cs.builtinTools = append([]agent.Tool{}, toolset...)
+
+	loadedExts := append([]extension.Extension{}, opts.Extensions...)
+	if opts.ExternalExtensions != nil {
+		ext, warnings := opts.ExternalExtensions.Load(ctx, LoadRequest{
+			Cwd: cwd, Trusted: tr.Trusted, SettingsPaths: set.ExtensionPaths(), Mode: mode,
+		})
+		loadedExts = append(loadedExts, ext...)
+		cs.Warnings = append(cs.Warnings, warnings...)
+	}
+	if len(loadedExts) > 0 {
 		cs.Extensions = extension.NewRunner(extension.RunnerOptions{
 			Mode: mode, Cwd: cwd, Trusted: tr.Trusted, UI: ui,
 		})
-		for _, e := range opts.Extensions {
+		for _, e := range loadedExts {
 			_ = cs.Extensions.Load(e)
 		}
 		toolset = append(toolset, cs.Extensions.Tools()...)
@@ -299,10 +316,15 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 	return cs, nil
 }
 
-// Close emits session shutdown to extensions.
+// Close emits session shutdown to extensions and stops the ones running in
+// their own processes. Skipping the second half would leak a process per
+// session.
 func (s *Session) Close(ctx context.Context, reason string) {
 	if s.Extensions != nil {
 		s.Extensions.EmitSessionShutdown(ctx, &extension.SessionShutdownEvent{Reason: reason})
+	}
+	if s.opts.ExternalExtensions != nil {
+		s.opts.ExternalExtensions.Stop(reason)
 	}
 }
 

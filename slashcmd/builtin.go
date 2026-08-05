@@ -75,6 +75,9 @@ type Host interface {
 	// ForkSession copies the session up to an entry into a new one and
 	// switches to it. An empty entryID copies the whole session.
 	ForkSession(ctx context.Context, entryID string) (string, error)
+	// Reload restarts the extensions that run in their own processes and
+	// rebuilds the dispatch runner around them.
+	Reload(ctx context.Context) (string, error)
 }
 
 // Interactive is the extra surface a host with a UI provides. Built-in
@@ -176,6 +179,10 @@ func RegisterBuiltins(r *Registry, host Host) {
 			r.Register(New(info, treeRun(host, ui)))
 		case "fork":
 			r.Register(New(info, forkRun(host, ui)))
+		case "reload":
+			r.Register(New(info, plainHostOp(host, func(ctx context.Context, _ string) (string, error) {
+				return host.Reload(ctx)
+			})))
 		case "clone":
 			r.Register(New(info, sessionOp2(host, func(ctx context.Context, _ string) (string, error) {
 				return host.ForkSession(ctx, "")
