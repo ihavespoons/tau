@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/ihavespoons/tau/extension"
+	"github.com/ihavespoons/tau/extension/wire"
 )
 
 // Manager owns the subprocess extensions a session has spawned.
@@ -40,6 +41,13 @@ func (m *Manager) SetContext(cwd string, trusted bool) {
 	defer m.mu.Unlock()
 	m.opts.Cwd = cwd
 	m.opts.Trusted = trusted
+}
+
+// SetState supplies the handshake snapshot source.
+func (m *Manager) SetState(fn func() *wire.SessionState) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.opts.State = fn
 }
 
 func (m *Manager) options() Options {

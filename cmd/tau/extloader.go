@@ -8,6 +8,7 @@ import (
 	"github.com/ihavespoons/tau/coding"
 	"github.com/ihavespoons/tau/config"
 	"github.com/ihavespoons/tau/extension"
+	"github.com/ihavespoons/tau/extension/wire"
 	"github.com/ihavespoons/tau/internal/exthost"
 )
 
@@ -75,11 +76,33 @@ func (l *subprocessLoader) candidates(req coding.LoadRequest) []exthost.Candidat
 	return cands
 }
 
+// snapshot converts the session view into the handshake's shape.
+func snapshot(s coding.Snapshot) *wire.SessionState {
+	out := &wire.SessionState{
+		SessionName:   s.SessionName,
+		ThinkingLevel: s.ThinkingLevel,
+		ActiveTools:   s.ActiveTools,
+	}
+	if s.ModelID != "" {
+		out.Model = &wire.ModelInfo{
+			ID: s.ModelID, Provider: s.ModelProvider,
+			ContextWindow: s.ContextWindow, MaxTokens: s.MaxTokens,
+		}
+	}
+	for _, c := range s.Commands {
+		out.Commands = append(out.Commands, wire.CommandInfo{
+			Name: c.Name, Description: c.Description, Source: c.Source,
+		})
+	}
+	return out
+}
+
 func (l *subprocessLoader) Load(ctx context.Context, req coding.LoadRequest) ([]extension.Extension, []string) {
 	// The handshake tells the extension where it is and whether the project is
 	// trusted, so the manager's options are completed here rather than at
 	// construction: neither is known until the trust decision has been made.
 	l.mgr.SetContext(req.Cwd, req.Trusted)
+	l.mgr.SetState(func() *wire.SessionState { return snapshot(req.Snapshot) })
 
 	exts := l.mgr.Load(ctx, l.candidates(req))
 	for _, err := range l.mgr.Errors() {
@@ -92,6 +115,7 @@ func (l *subprocessLoader) Load(ctx context.Context, req coding.LoadRequest) ([]
 
 func (l *subprocessLoader) Reload(ctx context.Context, req coding.LoadRequest) ([]extension.Extension, []string) {
 	l.mgr.SetContext(req.Cwd, req.Trusted)
+	l.mgr.SetState(func() *wire.SessionState { return snapshot(req.Snapshot) })
 	exts := l.mgr.Reload(ctx, l.candidates(req))
 	for _, err := range l.mgr.Errors() {
 		l.diagnostics = append(l.diagnostics, err.Error())

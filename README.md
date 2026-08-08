@@ -6,9 +6,9 @@ same minimalist philosophy — shipped as a single static binary with no runtime
 dependencies.
 
 > **Status: early development.** tau is being built in phases toward parity with
-> Pi v0.82.1. The interactive agent, all ten wire APIs, session trees and Pi
-> import are in; the extension subprocess protocol, skills, themes and the
-> HTML export are still landing.
+> Pi v0.82.1. The interactive agent, all ten wire APIs, session trees, Pi
+> import and the extension system are in; skills, themes and the HTML export
+> are still landing.
 >
 > **tau does not ask before it acts.** It edits files and runs shell commands
 > without a confirmation prompt. Run it on a clean git tree or in a scratch
@@ -188,6 +188,65 @@ Your Pi installation is never modified — not the sessions, not the credentials
 The two can coexist while you decide, and an import that damages what it
 imported is not one you would run twice. Files that already exist under `~/.tau`
 are left alone unless you pass `--overwrite`.
+
+## Extensions
+
+An extension observes and shapes what the agent does: gate a tool call, rewrite
+the context, register tools and commands, ask the user something. There are two
+ways to write one, and they are the same feature.
+
+**In-process, in Go** — `import "github.com/ihavespoons/tau/extension"`, write a
+factory, compile it in. This is what the bundled MCP client is.
+
+**Out of process, in anything** — a program that reads and writes JSON lines on
+stdin and stdout. tau spawns it, hands it the events it subscribed to, and
+treats it exactly like a compiled-in one: the same composition rules, the same
+error handling, the same tool registry.
+
+```sh
+tau -e ./my-extension.ts        # repeatable
+```
+
+Discovery, nearest first: `-e` flags, then `extensions` in your settings, then
+`~/.tau/agent/extensions/`, then `.tau/extensions/` — the last only in a
+directory you have trusted, because cloning a repository must not be enough to
+make tau launch what is in it.
+
+A `.ts` or `.js` file runs under the host shim; an executable runs directly.
+tau never installs anything on an extension's behalf.
+
+### Pi extensions
+
+Pi's TypeScript extensions run on tau unmodified, through a shim you install
+once:
+
+```sh
+npm i -g @ihavespoons/tau-pi-host
+tau -e ~/.pi/agent/extensions/my-extension.ts
+```
+
+The shim aliases Pi's packages to an implementation backed by the protocol, so
+`import { defineTool } from "@earendil-works/pi-coding-agent"` resolves and
+works. Node 22.18+ strips TypeScript types natively, so there is no build step.
+
+What does not cross a pipe is anything that needs to draw: custom editors,
+overlays, and provider registration throw a named error and are reported once at
+load, rather than appearing to work and silently doing nothing. Those need a Go
+port.
+
+## Driving tau from another program
+
+`--mode rpc` turns tau into a JSONL server on stdin and stdout — the mode for an
+editor or a supervisor rather than a person:
+
+```sh
+tau --mode rpc
+```
+
+Commands go in, responses and events come out, one JSON value per line. Unlike
+`-p`, the connection stays usable while a turn runs: you can steer it, abort it,
+navigate the session tree, or answer a dialog an extension opened. The command
+and event shapes are Pi's, so a client written against Pi drives tau unchanged.
 
 ## MCP
 

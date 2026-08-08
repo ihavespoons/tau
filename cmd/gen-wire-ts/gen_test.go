@@ -15,12 +15,20 @@ func TestGeneratedDeclarationsAreUpToDate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
-	want, err := os.ReadFile("../../extension/wire/protocol.d.ts")
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if !bytes.Equal(bytes.TrimSpace(want), bytes.TrimSpace(got)) {
-		t.Fatal("extension/wire/protocol.d.ts is stale; run `go generate ./extension/wire/`")
+	// Both copies: the one Go developers read and the one the npm package
+	// ships. A shim published against a stale declaration is the drift this
+	// whole mechanism exists to prevent.
+	for _, path := range []string{
+		"../../extension/wire/protocol.d.ts",
+		"../../shim/types/protocol.d.ts",
+	} {
+		want, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if !bytes.Equal(bytes.TrimSpace(want), bytes.TrimSpace(got)) {
+			t.Fatalf("%s is stale; run `go generate ./extension/wire/`", path)
+		}
 	}
 }
 

@@ -1,0 +1,29 @@
+{
+  "name": "@ihavespoons/tau-pi-host",
+  "version": "0.13.0",
+  "description": "Runs Pi coding-agent extensions against tau, over tau's subprocess extension protocol.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "tau-pi-host": "bin/tau-pi-host.mjs"
+  },
+  "exports": {
+    ".": "./src/host.mjs",
+    "./bridge": "./src/bridge.mjs",
+    "./protocol": "./types/protocol.d.ts"
+  },
+  "files": [
+    "bin",
+    "src",
+    "types",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ihavespoons/tau.git",
+    "directory": "shim"
+  }
+}

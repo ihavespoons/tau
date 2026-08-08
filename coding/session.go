@@ -258,8 +258,18 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 
 	loadedExts := append([]extension.Extension{}, opts.Extensions...)
 	if opts.ExternalExtensions != nil {
+		// The snapshot is partial here on purpose: extensions load before the
+		// agent and the command registry exist, because they contribute tools
+		// and commands to both. What is knowable now is sent, and the shim's
+		// mirror catches up from the events that follow.
+		snap := Snapshot{ThinkingLevel: string(thinking)}
+		if model != nil {
+			snap.ModelID, snap.ModelProvider = model.ID, string(model.Provider)
+			snap.ContextWindow, snap.MaxTokens = model.ContextWindow, model.MaxTokens
+		}
 		ext, warnings := opts.ExternalExtensions.Load(ctx, LoadRequest{
-			Cwd: cwd, Trusted: tr.Trusted, SettingsPaths: set.ExtensionPaths(), Mode: mode,
+			Cwd: cwd, Trusted: tr.Trusted, SettingsPaths: set.ExtensionPaths(),
+			Mode: mode, Snapshot: snap,
 		})
 		loadedExts = append(loadedExts, ext...)
 		cs.Warnings = append(cs.Warnings, warnings...)

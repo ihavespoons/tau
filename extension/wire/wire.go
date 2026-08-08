@@ -120,6 +120,36 @@ type Init struct {
 	Flags map[string]any `json:"flags,omitempty"`
 	// TauVersion lets an extension branch on host capabilities.
 	TauVersion string `json:"tauVersion,omitempty"`
+	// State is a snapshot of what the extension can otherwise only learn by
+	// asking.
+	//
+	// It exists because Pi's ExtensionAPI getters are synchronous — an
+	// extension writes `pi.getSessionName()` and puts the string straight into
+	// a message. Nothing can be synchronous across a pipe, so the shim mirrors
+	// this and keeps it current from the events that change it. Without the
+	// seed, every getter would return empty until the first such event, which
+	// for a session name is never.
+	State *SessionState `json:"state,omitempty"`
+}
+
+// SessionState is the mirrored view an out-of-process extension reads
+// synchronously.
+type SessionState struct {
+	SessionName   string     `json:"sessionName,omitempty"`
+	Model         *ModelInfo `json:"model,omitempty"`
+	ThinkingLevel string     `json:"thinkingLevel,omitempty"`
+	ActiveTools   []string   `json:"activeTools,omitempty"`
+	// Commands is the host's slash-command list, which Pi exposes through
+	// getCommands().
+	Commands []CommandInfo `json:"commands,omitempty"`
+}
+
+// CommandInfo describes a command the host offers.
+type CommandInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	// Source is "builtin", "extension", "prompt", or "skill".
+	Source string `json:"source,omitempty"`
 }
 
 // ToolDecl is a tool the extension registers.

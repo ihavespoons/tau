@@ -34,6 +34,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,6 +45,7 @@ func main() {
 		src   = flag.String("src", "extension/wire", "directory holding the protocol types")
 		out   = flag.String("o", "extension/wire/protocol.d.ts", "output file")
 		check = flag.Bool("check", false, "verify the output is up to date instead of writing it")
+		also  = flag.String("also", "shim/types/protocol.d.ts", "second copy to verify under -check")
 	)
 	flag.Parse()
 
@@ -54,15 +56,24 @@ func main() {
 	}
 
 	if *check {
-		want, err := os.ReadFile(*out)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "gen-wire-ts: %s is missing; run `go generate ./extension/wire/`\n", *out)
-			os.Exit(1)
+		// Both copies are checked: the one Go developers read, and the one the
+		// npm package ships. A shim published against a stale declaration is
+		// exactly the drift this mechanism exists to prevent.
+		paths := []string{*out}
+		if *also != "" {
+			paths = append(paths, *also)
 		}
-		if !bytes.Equal(bytes.TrimSpace(want), bytes.TrimSpace(got)) {
-			fmt.Fprintf(os.Stderr,
-				"gen-wire-ts: %s is out of date with the Go types; run `go generate ./extension/wire/`\n", *out)
-			os.Exit(1)
+		for _, path := range paths {
+			want, err := os.ReadFile(path)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "gen-wire-ts: %s is missing; run `go generate ./extension/wire/`\n", path)
+				os.Exit(1)
+			}
+			if !bytes.Equal(bytes.TrimSpace(want), bytes.TrimSpace(got)) {
+				fmt.Fprintf(os.Stderr,
+					"gen-wire-ts: %s is out of date with the Go types; run `go generate ./extension/wire/`\n", path)
+				os.Exit(1)
+			}
 		}
 		return
 	}
@@ -217,18 +228,46 @@ func comment(doc *ast.CommentGroup, indent string) string {
 	return b.String()
 }
 
-func generate(dir string) ([]byte, error) {
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool {
-		// Generated declarations describe the protocol, not the reference
-		// server or its tests.
-		name := fi.Name()
-		return strings.HasSuffix(name, ".go") &&
-			!strings.HasSuffix(name, "_test.go") &&
-			name != "serve.go" && name != "codec.go"
-	}, parser.ParseComments)
+// protocolFiles lists the sources that define the protocol.
+//
+// The reference server and the codec are excluded: they implement the protocol
+// rather than describing it, and their types are Go plumbing with no meaning on
+// the TypeScript side.
+func protocolFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") {
+			continue
+		}
+		if strings.HasSuffix(name, "_test.go") || name == "serve.go" || name == "codec.go" {
+			continue
+		}
+		out = append(out, filepath.Join(dir, name))
+	}
+	// Map and directory iteration order both vary; a generator whose output
+	// depends on either fails the CI check at random.
+	sort.Strings(out)
+	return out, nil
+}
+
+func generate(dir string) ([]byte, error) {
+	paths, err := protocolFiles(dir)
+	if err != nil {
+		return nil, err
+	}
+	fset := token.NewFileSet()
+	var files []*ast.File
+	for _, path := range paths {
+		f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, f)
 	}
 
 	var b strings.Builder
@@ -250,41 +289,30 @@ func generate(dir string) ([]byte, error) {
 	var consts []string
 	var types []decl
 
-	for _, pkg := range pkgs {
-		files := make([]string, 0, len(pkg.Files))
-		for name := range pkg.Files {
-			files = append(files, name)
-		}
-		// Map iteration order is unspecified, and a generator whose output
-		// depends on it fails the CI check at random.
-		sort.Strings(files)
-
-		for _, name := range files {
-			file := pkg.Files[name]
-			for _, d := range file.Decls {
-				gd, ok := d.(*ast.GenDecl)
-				if !ok {
-					continue
-				}
-				switch gd.Tok {
-				case token.CONST:
-					consts = append(consts, emitConsts(gd)...)
-				case token.TYPE:
-					for _, spec := range gd.Specs {
-						ts, ok := spec.(*ast.TypeSpec)
-						if !ok || !ts.Name.IsExported() {
-							continue
-						}
-						st, ok := ts.Type.(*ast.StructType)
-						if !ok {
-							continue
-						}
-						doc := gd.Doc
-						if doc == nil {
-							doc = ts.Doc
-						}
-						types = append(types, decl{ts.Name.Name, emitInterface(ts.Name.Name, doc, st)})
+	for _, file := range files {
+		for _, d := range file.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			switch gd.Tok {
+			case token.CONST:
+				consts = append(consts, emitConsts(gd)...)
+			case token.TYPE:
+				for _, spec := range gd.Specs {
+					ts, ok := spec.(*ast.TypeSpec)
+					if !ok || !ts.Name.IsExported() {
+						continue
 					}
+					st, ok := ts.Type.(*ast.StructType)
+					if !ok {
+						continue
+					}
+					doc := gd.Doc
+					if doc == nil {
+						doc = ts.Doc
+					}
+					types = append(types, decl{ts.Name.Name, emitInterface(ts.Name.Name, doc, st)})
 				}
 			}
 		}

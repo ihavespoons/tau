@@ -45,6 +45,30 @@ type LoadRequest struct {
 	SettingsPaths []string
 	// Mode is the host's UI mode, for diagnostics.
 	Mode extension.Mode
+	// Snapshot is the session state an out-of-process extension needs to be
+	// able to answer synchronously. Pi's ExtensionAPI getters return values,
+	// not promises, and an extension puts them straight into a message; a
+	// loader that omits this leaves every one of them empty.
+	Snapshot Snapshot
+}
+
+// Snapshot is the session state handed to an out-of-process extension at load.
+type Snapshot struct {
+	SessionName   string
+	ModelID       string
+	ModelProvider string
+	ContextWindow int
+	MaxTokens     int
+	ThinkingLevel string
+	ActiveTools   []string
+	Commands      []SnapshotCommand
+}
+
+// SnapshotCommand is one entry in the command list Pi exposes via getCommands.
+type SnapshotCommand struct {
+	Name        string
+	Description string
+	Source      string
 }
 
 // ReloadExtensions restarts the out-of-process extensions and rebuilds the
@@ -73,6 +97,7 @@ func (s *Session) ReloadExtensions(ctx context.Context) error {
 		req := LoadRequest{
 			Cwd: s.Cwd, Trusted: s.Trust.Trusted,
 			SettingsPaths: s.Settings.ExtensionPaths(), Mode: s.opts.Mode,
+			Snapshot: s.Snapshot(),
 		}
 		ext, warnings := s.opts.ExternalExtensions.Reload(ctx, req)
 		loaded = append(loaded, ext...)
@@ -110,4 +135,34 @@ func (s *Session) ExtensionNames() []string {
 		return nil
 	}
 	return s.Extensions.Names()
+}
+
+// Snapshot describes the session for an out-of-process extension.
+//
+// It is taken at the moment it is asked for rather than cached: a reload
+// happens mid-session, and handing the new process the state from startup
+// would make its first answers wrong in a way nothing would report.
+func (s *Session) Snapshot() Snapshot {
+	snap := Snapshot{}
+	if s.Model != nil {
+		snap.ModelID = s.Model.ID
+		snap.ModelProvider = string(s.Model.Provider)
+		snap.ContextWindow = s.Model.ContextWindow
+		snap.MaxTokens = s.Model.MaxTokens
+	}
+	if s.Agent != nil {
+		snap.ThinkingLevel = string(s.Agent.ThinkingLevel())
+		snap.ActiveTools = s.ToolNames()
+	}
+	if s.Session != nil {
+		snap.SessionName = (runtimeAdapter{s}).SessionName()
+	}
+	if s.Commands != nil {
+		for _, info := range s.Commands.List() {
+			snap.Commands = append(snap.Commands, SnapshotCommand{
+				Name: info.Name, Description: info.Description, Source: string(info.Source),
+			})
+		}
+	}
+	return snap
 }

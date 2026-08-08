@@ -109,13 +109,14 @@ type Options struct {
 	OnSuspend func(name string, reason error)
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
+	// State supplies the handshake snapshot an extension reads synchronously.
+	// Nil sends none, and a shim's getters start empty.
+	State func() *wire.SessionState
 }
 
 // pending is one outstanding host→extension request.
 type pending struct {
 	ch chan wire.Result
-	// hot marks a conflated request, whose result nobody is waiting for.
-	hot bool
 }
 
 // Host is one running subprocess extension.
@@ -156,8 +157,6 @@ type Host struct {
 	// action frames have somewhere to go.
 	apiMu sync.Mutex
 	api   *extension.API
-	// ctxSource issues the extension Context an inbound request runs against.
-	ctxSource func() *extension.Context
 
 	// hot is the conflating sender for streaming events.
 	hot *conflator
@@ -261,6 +260,9 @@ func (h *Host) handshake(ctx context.Context) error {
 		Name: h.spec.Name, Path: h.spec.Path,
 		Cwd: h.opts.Cwd, Mode: "rpc", Trusted: h.opts.Trusted,
 		Generation: h.generation.Load(), TauVersion: h.opts.TauVersion,
+	}
+	if h.opts.State != nil {
+		init.State = h.opts.State()
 	}
 	if err := h.w.Write(init); err != nil {
 		return fmt.Errorf("exthost: %s: send init: %w", h.spec.Name, err)

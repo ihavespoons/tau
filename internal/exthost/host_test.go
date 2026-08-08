@@ -38,7 +38,28 @@ type capture struct {
 	logs     []string
 	warnings []string
 	suspends []string
-	stderr   bytes.Buffer
+	// stderr is written by the goroutine draining the child's pipe and read by
+	// the test, so it needs its own lock rather than the plain buffer it looks
+	// like it could be.
+	stderr lockedBuffer
+}
+
+// lockedBuffer is a bytes.Buffer that can be written and read concurrently.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func (c *capture) Logs() []string {
@@ -665,6 +686,7 @@ func TestStaleGenerationResultsAreDiscarded(t *testing.T) {
 	case res := <-done:
 		if res == nil {
 			t.Fatal("no result at all")
+			return
 		}
 		if res.Action == extension.InputTransform {
 			t.Fatalf("a decision about the previous session was applied to this one: %+v", res)
@@ -761,16 +783,6 @@ func textOf(r agent.ToolResult) string {
 		}
 	}
 	return sb.String()
-}
-
-func fmtSscan(s string, out *int) (int, error) {
-	n := 0
-	i := 0
-	for ; i < len(s) && s[i] >= '0' && s[i] <= '9'; i++ {
-		n = n*10 + int(s[i]-'0')
-	}
-	*out = n
-	return i, nil
 }
 
 type stubUI struct{}
