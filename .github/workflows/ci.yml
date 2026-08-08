@@ -13,6 +13,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
+      # The TypeScript host shim is a Node program, and the tests that prove a
+      # real Pi extension runs on tau skip without one. A silent skip in CI
+      # would mean the dogfood gate quietly stopped being checked.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.18"
       - run: go build ./...
       - run: go vet ./...
       # The protocol's TypeScript declarations are generated from the Go types
