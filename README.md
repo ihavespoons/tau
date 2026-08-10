@@ -331,11 +331,20 @@ Typing always wins — binding an action to a bare letter shadows nothing, becau
 a config that made `a` untypeable would leave you unable to type the command
 that undoes it.
 
-Two caveats. `shift+enter` needs a terminal that distinguishes it from `enter`,
-which most do not report to tau yet; `ctrl+j` is the one that always works. And
-the table carries the full set of Pi's ids, but a few actions behind them are
-still landing — external editor, image paste, the kill ring, and undo are P10
-work, so binding those ids does nothing today.
+`ctrl+-` undoes, a word or a run of typing at a time rather than a character.
+`ctrl+w`, `alt+d`, `ctrl+u` and `ctrl+k` put what they remove on a kill ring;
+`ctrl+y` yanks the last kill back and `alt+y` walks further back through the
+ring. The ring outlives a submission, so text cut from one prompt can be yanked
+into the next. `ctrl+g` opens the prompt in `$VISUAL` or `$EDITOR` and adopts
+whatever comes back — as one undoable edit, so `ctrl+-` takes it back.
+
+Three caveats. `shift+enter` needs a terminal that distinguishes it from
+`enter`, which most do not report to tau yet; `ctrl+j` is the one that always
+works. Image paste is still landing, so binding `pasteImage` does nothing today.
+And `pageUp`, `pageDown` and `copy` are deliberately left alone: tau prints into
+the terminal's own scrollback rather than taking over the screen, so scrolling
+and selection belong to the terminal, and claiming those keys would take them
+away from it.
 
 ## Settings
 

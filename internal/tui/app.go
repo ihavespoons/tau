@@ -184,6 +184,10 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.emit(msg.lines)
 		return a, nil
 
+	case externalEditorDone:
+		a.finishExternalEditor(msg)
+		return a, nil
+
 	case openDialogMsg:
 		a.dialogs.push(msg.d)
 		return a, nil
@@ -339,6 +343,9 @@ func (a *app) onKey(msg tea.KeyMsg) tea.Cmd {
 			a.notice = "thinking blocks shown"
 		}
 		return nil
+
+	case a.bound(key, keybindings.AppEditorExternal):
+		return a.openExternalEditor()
 
 	case a.bound(key, keybindings.AppMessageFollowUp):
 		return a.followUp()

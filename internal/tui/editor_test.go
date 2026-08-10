@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/ihavespoons/tau/keybindings"
 )
 
 func newTestEditor() *editor {
@@ -249,5 +250,184 @@ func TestUnicodeIsHandledByRune(t *testing.T) {
 	e.Update(tea.KeyMsg{Type: tea.KeyBackspace})
 	if got := e.Value(); got != "héllo — 世" {
 		t.Errorf("backspace removed the wrong amount: %q", got)
+	}
+}
+
+// --- undo ---
+
+// A run of typing is one undo step. Undoing a letter at a time would make the
+// key useless for the thing people reach for it after: typing the wrong word.
+func TestUndoTakesBackAWholeTypingRun(t *testing.T) {
+	e := newTestEditor()
+	typeText(e, "hello")
+	typeText(e, " world")
+
+	e.undo()
+	if got := e.Value(); got != "" {
+		t.Errorf("after undo = %q, want the buffer empty", got)
+	}
+}
+
+// Changing the kind of edit ends the run, so each kind can be taken back on
+// its own.
+func TestUndoSeparatesTypingFromDeleting(t *testing.T) {
+	e := newTestEditor()
+	typeText(e, "hello")
+	e.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	e.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	if got := e.Value(); got != "hel" {
+		t.Fatalf("setup produced %q", got)
+	}
+
+	e.undo()
+	if got := e.Value(); got != "hello" {
+		t.Errorf("first undo = %q, want the deletions taken back", got)
+	}
+	e.undo()
+	if got := e.Value(); got != "" {
+		t.Errorf("second undo = %q, want the typing taken back", got)
+	}
+}
+
+func TestUndoRestoresTheCursor(t *testing.T) {
+	e := newTestEditor()
+	typeText(e, "hello")
+	e.Update(tea.KeyMsg{Type: tea.KeyCtrlA}) // to line start
+	e.Update(tea.KeyMsg{Type: tea.KeyCtrlK}) // kill to line end
+
+	e.undo()
+	if e.Value() != "hello" {
+		t.Fatalf("undo did not restore the text: %q", e.Value())
+	}
+	if e.cursor != 0 {
+		t.Errorf("cursor = %d, want 0 — where it was when the kill happened", e.cursor)
+	}
+}
+
+func TestUndoOnAnEmptyStackDoesNothing(t *testing.T) {
+	e := newTestEditor()
+	e.undo()
+	if got := e.Value(); got != "" {
+		t.Errorf("value = %q", got)
+	}
+}
+
+// Submitting ends the undo history: taking back a prompt that has already been
+// sent is not what the key means.
+func TestUndoDoesNotReachAcrossASubmission(t *testing.T) {
+	e := newTestEditor()
+	typeText(e, "sent\n")
+	e.Reset()
+
+	typeText(e, "next")
+	e.undo()
+	if got := e.Value(); got != "" {
+		t.Errorf("value = %q, want only the new text taken back", got)
+	}
+	e.undo()
+	if got := e.Value(); got != "" {
+		t.Errorf("undo reached back into a submitted prompt: %q", got)
+	}
+}
+
+func TestUndoIsBoundToItsKey(t *testing.T) {
+	e := newTestEditor()
+	if !e.bound("ctrl+-", keybindings.EditorUndo) {
+		t.Error("ctrl+- is not bound to undo")
+	}
+}
+
+// --- kill ring ---
+
+func TestKillingWordsFillsTheRing(t *testing.T) {
+	e := newTestEditor()
+	typeText(e, "alpha beta")
+	e.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+
+	if len(e.kills) != 1 || e.kills[0] != "beta" {
+		t.Fatalf("kill ring = %q", e.kills)
+	}
+	if got := e.Value(); got != "alpha " {
+		t.Errorf("buffer = %q", got)
+	}
+}
+
+// A single character is a correction, not a cut: putting it on the ring would
+// push out text the user meant to keep.
+func TestSingleCharacterDeletesDoNotFillTheRing(t *testing.T) {
+	e := newTestEditor()
+	typeText(e, "abc")
+	e.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	e.Update(tea.KeyMsg{Type: tea.KeyDelete})
+
+	if len(e.kills) != 0 {
+		t.Errorf("kill ring = %q, want it untouched", e.kills)
+	}
+}
+
+func TestYankInsertsTheMostRecentKill(t *testing.T) {
+	e := newTestEditor()
+	typeText(e, "alpha beta")
+	e.Update(tea.KeyMsg{Type: tea.KeyCtrlW}) // kill "beta"
+	e.Update(tea.KeyMsg{Type: tea.KeyCtrlY}) // yank it back
+
+	if got := e.Value(); got != "alpha beta" {
+		t.Errorf("value = %q, want the kill restored", got)
+	}
+}
+
+func TestYankPopWalksBackThroughTheRing(t *testing.T) {
+	e := newTestEditor()
+	typeText(e, "one two")
+	e.Update(tea.KeyMsg{Type: tea.KeyCtrlW}) // kills "two"
+	e.Update(tea.KeyMsg{Type: tea.KeyCtrlW}) // kills "one "
+	e.Reset()
+
+	e.Update(tea.KeyMsg{Type: tea.KeyCtrlY}) // yanks "one "
+	if got := e.Value(); got != "one " {
+		t.Fatalf("yank = %q, want the most recent kill", got)
+	}
+
+	e.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}, Alt: true})
+	if got := e.Value(); got != "two" {
+		t.Errorf("yank-pop = %q, want the kill before it", got)
+	}
+}
+
+// Yank-pop only means anything straight after a yank. Anywhere else it would
+// silently replace text the user typed.
+func TestYankPopDoesNothingWithoutAYank(t *testing.T) {
+	e := newTestEditor()
+	typeText(e, "one two")
+	e.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+	e.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+	e.Reset()
+
+	typeText(e, "typed")
+	e.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}, Alt: true})
+	if got := e.Value(); got != "typed" {
+		t.Errorf("value = %q, want it left alone", got)
+	}
+}
+
+// The ring survives a submission, so text killed in one prompt can be yanked
+// into the next.
+func TestKillRingSurvivesReset(t *testing.T) {
+	e := newTestEditor()
+	typeText(e, "alpha beta")
+	e.Update(tea.KeyMsg{Type: tea.KeyCtrlW})
+	e.Reset()
+
+	e.Update(tea.KeyMsg{Type: tea.KeyCtrlY})
+	if got := e.Value(); got != "beta" {
+		t.Errorf("value = %q, want the kill still available", got)
+	}
+}
+
+func TestYankOnAnEmptyRingDoesNothing(t *testing.T) {
+	e := newTestEditor()
+	e.Update(tea.KeyMsg{Type: tea.KeyCtrlY})
+	if got := e.Value(); got != "" {
+		t.Errorf("value = %q", got)
 	}
 }

@@ -27,9 +27,48 @@ type editor struct {
 	histIdx int
 	draft   string
 
+	// undos holds buffer snapshots, oldest last.
+	undos []undoState
+	// run names the kind of edit the last key made, so a run of typing or a
+	// run of backspaces collapses into one undo step rather than one per
+	// keystroke. Undo should take back a word, not a letter.
+	run editRun
+
+	// kills holds killed text, most recent last.
+	kills []string
+	// yank describes the span the last yank inserted, so yank-pop can replace
+	// it with the kill before it.
+	yank yankState
+
 	theme Theme
 	keys  *keybindings.Manager
 }
+
+// undoState is a buffer snapshot.
+type undoState struct {
+	text   []rune
+	cursor int
+}
+
+// yankState marks the text a yank just inserted. at < 0 means the last action
+// was not a yank, which is what makes yank-pop only work straight after one.
+type yankState struct{ at, end, idx int }
+
+// editRun groups consecutive edits of the same kind into one undo step.
+type editRun int
+
+const (
+	runNone editRun = iota
+	runType
+	runDelete
+)
+
+// undoMax and killRingMax bound what the editor remembers. Both are per
+// session and small; the point is to survive a mistake, not to be a database.
+const (
+	undoMax     = 128
+	killRingMax = 16
+)
 
 // newEditor builds the prompt. A nil manager means tau's defaults, which keeps
 // the editor constructible in tests that are not about keys.
@@ -37,7 +76,7 @@ func newEditor(theme Theme, keys *keybindings.Manager) *editor {
 	if keys == nil {
 		keys = keybindings.New(nil)
 	}
-	return &editor{width: 80, theme: theme, keys: keys}
+	return &editor{width: 80, theme: theme, keys: keys, yank: yankState{at: -1}}
 }
 
 // Value returns the current text.
@@ -53,11 +92,129 @@ func (e *editor) SetValue(s string) {
 }
 
 // Reset clears the editor and stops history browsing.
+//
+// The undo stack goes with it: undoing across a submission would resurrect a
+// prompt that has already been sent, which is not what the key means. The kill
+// ring stays — killing text in one prompt and yanking it into the next is the
+// reason a kill ring is separate from undo.
 func (e *editor) Reset() {
 	e.text = nil
 	e.cursor = 0
 	e.histIdx = len(e.history)
 	e.draft = ""
+	e.undos = nil
+	e.run = runNone
+	e.yank = yankState{at: -1}
+}
+
+// snapshot records the buffer so the next edit can be undone.
+func (e *editor) snapshot() {
+	e.undos = append(e.undos, undoState{
+		text:   append([]rune(nil), e.text...),
+		cursor: e.cursor,
+	})
+	if len(e.undos) > undoMax {
+		e.undos = e.undos[len(e.undos)-undoMax:]
+	}
+}
+
+// undo restores the buffer to before the last edit.
+func (e *editor) undo() {
+	if len(e.undos) == 0 {
+		return
+	}
+	last := e.undos[len(e.undos)-1]
+	e.undos = e.undos[:len(e.undos)-1]
+	e.text, e.cursor = last.text, last.cursor
+	e.run = runNone
+	e.histIdx = len(e.history)
+}
+
+// kill pushes removed text onto the kill ring. Single characters are left out,
+// the way readline leaves them out: ctrl+h is a correction, not a cut.
+func (e *editor) kill(s string) {
+	if s == "" {
+		return
+	}
+	e.kills = append(e.kills, s)
+	if len(e.kills) > killRingMax {
+		e.kills = e.kills[len(e.kills)-killRingMax:]
+	}
+}
+
+// cut removes [from,to) and puts it on the kill ring.
+func (e *editor) cut(from, to int) {
+	if from >= to {
+		return
+	}
+	e.snapshot()
+	e.run = runNone
+	e.kill(string(e.text[from:to]))
+	e.text = append(append([]rune{}, e.text[:from]...), e.text[to:]...)
+	e.cursor = from
+}
+
+// yankKill inserts a kill and remembers where it went, so yank-pop can swap it.
+func (e *editor) yankKill(idx int) {
+	text := []rune(e.kills[idx])
+	start := e.cursor
+	e.insert(text)
+	e.yank = yankState{at: start, end: start + len(text), idx: idx}
+}
+
+// yankPop replaces what the previous yank inserted with the kill before it,
+// walking back through the ring on each press.
+//
+// It does nothing unless a yank was the immediately preceding action, which is
+// what stops the key from mangling text the user typed or pasted.
+func (e *editor) yankPop(last yankState) {
+	if last.at < 0 || len(e.kills) < 2 {
+		return
+	}
+	if last.at > len(e.text) || last.end > len(e.text) {
+		return
+	}
+
+	idx := last.idx - 1
+	if idx < 0 {
+		idx = len(e.kills) - 1
+	}
+	text := []rune(e.kills[idx])
+
+	out := make([]rune, 0, len(e.text)-(last.end-last.at)+len(text))
+	out = append(out, e.text[:last.at]...)
+	out = append(out, text...)
+	out = append(out, e.text[last.end:]...)
+
+	e.text = out
+	e.cursor = last.at + len(text)
+	e.yank = yankState{at: last.at, end: e.cursor, idx: idx}
+}
+
+// beginRun snapshots when the kind of edit changes, so consecutive keystrokes
+// of the same kind share one undo step.
+func (e *editor) beginRun(kind editRun) {
+	if e.run != kind {
+		e.snapshot()
+		e.run = kind
+	}
+}
+
+// typeRunes inserts typed characters as part of a single undo step.
+func (e *editor) typeRunes(rs []rune) {
+	e.beginRun(runType)
+	e.yank = yankState{at: -1}
+	e.insert(rs)
+}
+
+// Replace swaps the whole buffer, keeping the change undoable. It is what an
+// external editor comes back to: the text it returns is one edit, and the user
+// has to be able to take it back.
+func (e *editor) Replace(s string) {
+	e.snapshot()
+	e.run = runNone
+	e.yank = yankState{at: -1}
+	e.SetValue(s)
 }
 
 // SetWidth sets the wrap width for rendering.
@@ -95,6 +252,11 @@ func (e *editor) Update(msg tea.KeyMsg) (submit string, ok bool) {
 	// must never submit — pasting a multi-line snippet is not a decision to
 	// send it.
 	if msg.Paste {
+		// A paste is one action however much it carries, so it gets its own
+		// undo step rather than joining the typing run around it.
+		e.snapshot()
+		e.run = runNone
+		e.yank = yankState{at: -1}
 		e.insert(msg.Runes)
 		return "", false
 	}
@@ -105,10 +267,10 @@ func (e *editor) Update(msg tea.KeyMsg) (submit string, ok bool) {
 	// runes are held back, because that is where the word motions live.
 	switch {
 	case msg.Type == tea.KeyRunes && !msg.Alt:
-		e.insert(msg.Runes)
+		e.typeRunes(msg.Runes)
 		return "", false
 	case msg.Type == tea.KeySpace && !msg.Alt:
-		e.insert([]rune{' '})
+		e.typeRunes([]rune{' '})
 		return "", false
 	}
 
@@ -116,6 +278,12 @@ func (e *editor) Update(msg tea.KeyMsg) (submit string, ok bool) {
 	// — ctrl+u is delete-to-line-start here rather than a tree filter, and the
 	// word motions are checked before the character ones.
 	key := keyID(msg)
+
+	// Yank-pop is the one key that depends on what came just before it, so the
+	// state is read here and cleared for every other branch in one place.
+	lastYank := e.yank
+	e.yank = yankState{at: -1}
+
 	switch {
 	case e.bound(key, keybindings.InputSubmit):
 		if e.Empty() {
@@ -124,26 +292,39 @@ func (e *editor) Update(msg tea.KeyMsg) (submit string, ok bool) {
 		return e.Value(), true
 
 	case e.bound(key, keybindings.InputNewLine):
+		e.snapshot()
+		e.run = runNone
 		e.insert([]rune{'\n'})
+
+	case e.bound(key, keybindings.EditorUndo):
+		e.undo()
+	case e.bound(key, keybindings.EditorYank):
+		if len(e.kills) > 0 {
+			e.snapshot()
+			e.run = runNone
+			e.yankKill(len(e.kills) - 1)
+		}
+	case e.bound(key, keybindings.EditorYankPop):
+		e.yankPop(lastYank)
 
 	case e.bound(key, keybindings.EditorDeleteCharBackward):
 		e.deleteBackward()
 	case e.bound(key, keybindings.EditorDeleteCharForward):
 		e.deleteForward()
 	case e.bound(key, keybindings.EditorDeleteWordBackward):
-		start := e.wordStart()
-		e.text = append(append([]rune{}, e.text[:start]...), e.text[e.cursor:]...)
-		e.cursor = start
+		e.cut(e.wordStart(), e.cursor)
 	case e.bound(key, keybindings.EditorDeleteWordForward):
-		e.text = append(append([]rune{}, e.text[:e.cursor]...), e.text[e.wordEnd():]...)
+		// The cursor stays put, so the end is read before the buffer shrinks.
+		e.cut(e.cursor, e.wordEnd())
+		e.cursor = min(e.cursor, len(e.text))
 	case e.bound(key, keybindings.EditorDeleteToLineStart):
 		// Both bounds have to be read before the buffer shrinks: recomputing
 		// one afterwards would measure the new text with the old cursor.
-		start := e.lineStart()
-		e.text = append(append([]rune{}, e.text[:start]...), e.text[e.cursor:]...)
-		e.cursor = start
+		e.cut(e.lineStart(), e.cursor)
 	case e.bound(key, keybindings.EditorDeleteToLineEnd):
-		e.text = append(append([]rune{}, e.text[:e.cursor]...), e.text[e.lineEnd():]...)
+		at := e.cursor
+		e.cut(e.cursor, e.lineEnd())
+		e.cursor = at
 
 	case e.bound(key, keybindings.EditorCursorWordLeft):
 		e.cursor = e.wordStart()
@@ -182,10 +363,14 @@ func (e *editor) insert(rs []rune) {
 	e.histIdx = len(e.history)
 }
 
+// deleteBackward and deleteForward remove one character. They do not touch the
+// kill ring: readline treats a single character as a correction rather than a
+// cut, and putting one there would push out text the user meant to keep.
 func (e *editor) deleteBackward() {
 	if e.cursor == 0 {
 		return
 	}
+	e.beginRun(runDelete)
 	e.text = append(append([]rune{}, e.text[:e.cursor-1]...), e.text[e.cursor:]...)
 	e.cursor--
 }
@@ -194,6 +379,7 @@ func (e *editor) deleteForward() {
 	if e.cursor >= len(e.text) {
 		return
 	}
+	e.beginRun(runDelete)
 	e.text = append(append([]rune{}, e.text[:e.cursor]...), e.text[e.cursor+1:]...)
 }
 

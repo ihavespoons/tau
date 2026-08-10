@@ -4,6 +4,22 @@ All notable changes to tau are recorded here. Versions follow
 [semantic versioning](https://semver.org/); the `0.x` series is pre-1.0, so
 minor bumps may still change behaviour.
 
+## [0.22.0] - 2026-08-10
+
+- Undo (`ctrl+-`). A run of typing, or a run of backspaces, is one step: undo
+  takes back a word rather than a letter. The stack ends at a submission, so it
+  cannot resurrect a prompt that has already been sent.
+- A kill ring. `ctrl+w`, `alt+d`, `ctrl+u` and `ctrl+k` put what they remove on
+  it, `ctrl+y` yanks the last kill back, and `alt+y` walks further back. Single
+  characters stay off it — a backspace is a correction, not a cut. The ring
+  outlives a submission, so text cut from one prompt can be yanked into the
+  next.
+- `ctrl+g` opens the prompt in `$VISUAL` or `$EDITOR` and adopts what comes
+  back, as one undoable edit. If the editor fails, the prompt is left as it was.
+- `pageUp`, `pageDown` and `copy` are documented as deliberately unclaimed: tau
+  prints into the terminal's own scrollback, so scrolling and selection are the
+  terminal's, and binding those keys would take them away from it.
+
 ## [0.21.1] - 2026-08-10
 
 - Rendering a transcript allocates about a tenth less: theme colours resolve
