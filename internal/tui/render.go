@@ -7,6 +7,7 @@ import (
 
 	"github.com/ihavespoons/tau/agent"
 	"github.com/ihavespoons/tau/ai"
+	"github.com/ihavespoons/tau/session"
 )
 
 // renderer turns messages and tool activity into the lines that get flushed
@@ -218,4 +219,35 @@ func summarizeArgs(tool string, args map[string]any) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// userBash renders the header for a command the user ran with the ! prefix.
+//
+// Excluded runs are dimmed rather than coloured, which is how Pi marks the ones
+// the model will never see (bash-execution.ts:37): the difference matters when
+// scanning back through a transcript to work out what the model knows.
+func (r *renderer) userBash(command string, exclude bool) []string {
+	style := r.theme.BashMode
+	if exclude {
+		style = r.theme.Dim
+	}
+	return []string{style.Render("$ " + oneLine(command))}
+}
+
+// userBashResult renders what a ! command printed.
+func (r *renderer) userBashResult(m *session.BashExecutionMessage) []string {
+	var out []string
+	for _, l := range wrapBlock(strings.TrimRight(m.Output, "\n"), r.width-2) {
+		out = append(out, r.theme.ToolOut.Render("  "+l))
+	}
+	if m.Cancelled {
+		out = append(out, r.theme.Warning.Render("  cancelled"))
+	}
+	if m.ExitCode != nil && *m.ExitCode != 0 && !m.Cancelled {
+		out = append(out, r.theme.Error.Render(fmt.Sprintf("  exit %d", *m.ExitCode)))
+	}
+	if m.Truncated && m.FullOutputPath != "" {
+		out = append(out, r.theme.Dim.Render("  output truncated — in full at "+m.FullOutputPath))
+	}
+	return append(out, "")
 }

@@ -30,6 +30,7 @@ type Theme struct {
 	Accent    lipgloss.Style
 	Bold      lipgloss.Style
 	Prompt    lipgloss.Style
+	BashMode  lipgloss.Style
 	Status    lipgloss.Style
 	Selected  lipgloss.Style
 	Border    lipgloss.Style
@@ -78,6 +79,7 @@ func FromTheme(t *theme.Theme) Theme {
 		Accent:    fg(theme.Accent),
 		Bold:      lipgloss.NewStyle().Bold(true),
 		Prompt:    fg(theme.Accent),
+		BashMode:  fg(theme.BashMode).Bold(true),
 		Status:    fg(theme.Muted),
 		Selected:  fg(theme.Accent).Bold(true),
 		Border:    fg(theme.Border),

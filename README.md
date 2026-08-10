@@ -346,6 +346,32 @@ the terminal's own scrollback rather than taking over the screen, so scrolling
 and selection belong to the terminal, and claiming those keys would take them
 away from it.
 
+## Running shell commands
+
+A prompt starting with `!` runs in your shell instead of going to the model:
+
+```
+!git status
+!go test ./...
+!!npm install          # runs, but the model never sees it
+```
+
+The prompt gutter changes colour as soon as the `!` is typed, so there is never
+a question about where Enter will send the line. What the command printed is
+recorded in the session and shown to the model on the next turn — which is the
+point: you run the test, and the model can see why it failed without you pasting
+anything.
+
+Doubling the prefix keeps the run out of the model's context. Use it for the
+command you are about to run twenty times while iterating, where each run would
+cost tokens and tell the model nothing new. It is still recorded in the
+transcript and in an export; it is just never sent.
+
+This is your shell, not the model's tool: there is no approval step, no timeout,
+and `$EDITOR`-style interactive programs will not work, because the command runs
+without a terminal attached. Output beyond 64 KiB is captured to a file the
+transcript points at.
+
 ## Settings
 
 `/settings` reads and writes the merged configuration without leaving the

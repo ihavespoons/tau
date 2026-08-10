@@ -4,6 +4,19 @@ All notable changes to tau are recorded here. Versions follow
 [semantic versioning](https://semver.org/); the `0.x` series is pre-1.0, so
 minor bumps may still change behaviour.
 
+## [0.23.0] - 2026-08-10
+
+- `!` runs a prompt in your shell instead of sending it to the model, and the
+  prompt gutter changes colour the moment you type it. What the command printed
+  is recorded in the session and shown to the model on the next turn: run the
+  test, and it can see why it failed without you pasting anything.
+- `!!` runs the command without telling the model — for the one you are about
+  to run twenty times while iterating. It is still in the transcript and in an
+  export; it is just never sent.
+- The `user_bash` extension hook fires, so a sandbox or a remote executor can
+  answer instead of the local shell. It was declared in P3 and never called
+  until now.
+
 ## [0.22.0] - 2026-08-10
 
 - Undo (`ctrl+-`). A run of typing, or a run of backspaces, is one step: undo

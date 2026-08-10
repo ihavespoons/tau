@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ihavespoons/tau/coding"
 	"github.com/ihavespoons/tau/keybindings"
 )
 
@@ -84,6 +85,13 @@ func (e *editor) Value() string { return string(e.text) }
 
 // Empty reports whether there is nothing to submit.
 func (e *editor) Empty() bool { return strings.TrimSpace(string(e.text)) == "" }
+
+// BashMode reports whether the line will run as a shell command rather than go
+// to the model.
+func (e *editor) BashMode() bool {
+	_, _, ok := coding.ParseUserBash(string(e.text))
+	return ok
+}
 
 // SetValue replaces the text and puts the cursor at the end.
 func (e *editor) SetValue(s string) {
@@ -493,7 +501,13 @@ func (e *editor) historyNext() {
 
 // View renders the editor with a prompt gutter and a block cursor.
 func (e *editor) View(focused bool) string {
-	prompt := e.theme.Prompt.Render("› ")
+	// The gutter changes colour the moment the line becomes a shell command,
+	// so there is never a question about where Enter is going to send it.
+	style := e.theme.Prompt
+	if e.BashMode() {
+		style = e.theme.BashMode
+	}
+	prompt := style.Render("› ")
 	cont := e.theme.Dim.Render("  ")
 	avail := e.width - 2
 	if avail < 10 {

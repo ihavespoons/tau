@@ -188,6 +188,10 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.finishExternalEditor(msg)
 		return a, nil
 
+	case userBashDone:
+		a.finishUserBash(msg)
+		return a, nil
+
 	case openDialogMsg:
 		a.dialogs.push(msg.d)
 		return a, nil
@@ -431,6 +435,10 @@ func (a *app) submit(text string) tea.Cmd {
 
 	if _, isCmd := slashcmd.Parse(text); isCmd {
 		return a.runCommand(text)
+	}
+
+	if command, exclude, ok := coding.ParseUserBash(text); ok {
+		return a.runUserBash(command, exclude)
 	}
 
 	a.emit(append(a.rend.user(text), ""))
