@@ -25,6 +25,10 @@ type dialogResult struct {
 	// another while the asking goroutine is parked on the first one's reply —
 	// which is the deadlock this design exists to avoid.
 	Action keybindings.Binding
+	// Indices are the chosen rows of a checklist, in display order. Order is
+	// part of the answer: the list it configures is cycled in the order it is
+	// written.
+	Indices []int
 }
 
 // dialog is a modal that owns the keyboard while it is open.
@@ -440,4 +444,216 @@ func (d *inputDialog) view(width int, theme Theme) []string {
 		return append(out, theme.Dim.Render(d.placeholder))
 	}
 	return append(out, shown+theme.Accent.Render("▏"))
+}
+
+// --- checklist ---
+
+// multiSelectDialog is a checklist: several rows are toggled and then
+// committed together.
+//
+// It is a separate type from selectDialog rather than a mode on it, because
+// almost every key means something different. Enter here commits a set instead
+// of picking a row, and space toggles rather than typing — a filterable
+// single-select would have swallowed it into the filter.
+type multiSelectDialog struct {
+	baseDialog
+	options []extension.SelectOption
+	// checked runs parallel to options and is reordered with it.
+	checked []bool
+	cursor  int
+	visible int
+	filter  string
+	matches []int
+	// groupOf names the group a row belongs to, for the toggle-the-whole-group
+	// key. Nil disables that key rather than guessing at a grouping.
+	groupOf func(extension.SelectOption) string
+	hint    string
+}
+
+func (d *multiSelectDialog) refilter() {
+	d.matches = d.matches[:0]
+	needle := strings.ToLower(d.filter)
+	for i, o := range d.options {
+		if needle == "" ||
+			strings.Contains(strings.ToLower(o.Label), needle) ||
+			strings.Contains(strings.ToLower(o.Description), needle) {
+			d.matches = append(d.matches, i)
+		}
+	}
+	if d.cursor >= len(d.matches) {
+		d.cursor = max(0, len(d.matches)-1)
+	}
+}
+
+// current is the option index under the cursor, or -1 when nothing matches.
+func (d *multiSelectDialog) current() int {
+	if len(d.matches) == 0 {
+		return -1
+	}
+	return d.matches[d.cursor]
+}
+
+func (d *multiSelectDialog) key(msg tea.KeyMsg, km *keybindings.Manager) bool {
+	// Space toggles rather than joining the filter: on a checklist it is the
+	// primary verb, and a filter can always be typed with the other keys.
+	if !msg.Paste && !msg.Alt && msg.Type == tea.KeySpace {
+		if at := d.current(); at >= 0 {
+			d.checked[at] = !d.checked[at]
+		}
+		return false
+	}
+	if !msg.Paste && !msg.Alt && msg.Type == tea.KeyRunes {
+		d.filter += string(msg.Runes)
+		d.refilter()
+		return false
+	}
+
+	key := keyID(msg)
+	switch {
+	case bound(km, key, keybindings.SelectCancel):
+		d.close(dialogResult{Index: -1})
+		return true
+
+	// tau has no session-only model scope, so applying and saving are the same
+	// act and both keys do it. Pi separates them because its picker can scope a
+	// session without writing to settings.
+	case bound(km, key, keybindings.SelectConfirm), bound(km, key, keybindings.AppModelsSave):
+		d.close(dialogResult{Index: d.current(), OK: true, Indices: d.selected()})
+		return true
+
+	case bound(km, key, keybindings.AppModelsEnableAll):
+		d.setAll(true)
+	case bound(km, key, keybindings.AppModelsClearAll):
+		d.setAll(false)
+	case bound(km, key, keybindings.AppModelsToggleProvider):
+		d.toggleGroup()
+
+	case bound(km, key, keybindings.AppModelsReorderUp):
+		d.reorder(-1)
+	case bound(km, key, keybindings.AppModelsReorderDown):
+		d.reorder(1)
+
+	case bound(km, key, keybindings.SelectUp):
+		d.move(-1)
+	case bound(km, key, keybindings.SelectDown):
+		d.move(1)
+	case bound(km, key, keybindings.SelectPageUp):
+		d.move(-max(1, d.visible))
+	case bound(km, key, keybindings.SelectPageDown):
+		d.move(max(1, d.visible))
+	case bound(km, key, keybindings.EditorDeleteCharBackward):
+		if d.filter != "" {
+			r := []rune(d.filter)
+			d.filter = string(r[:len(r)-1])
+			d.refilter()
+		}
+	}
+	return false
+}
+
+// selected reports the checked rows in display order.
+func (d *multiSelectDialog) selected() []int {
+	var out []int
+	for i, on := range d.checked {
+		if on {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// setAll checks or clears every row, filtered or not: the keys are named for
+// all of them, and a hidden row silently keeping its state would be a trap.
+func (d *multiSelectDialog) setAll(on bool) {
+	for i := range d.checked {
+		d.checked[i] = on
+	}
+}
+
+// toggleGroup flips every row sharing the highlighted row's group, turning the
+// whole group off when all of it is already on.
+func (d *multiSelectDialog) toggleGroup() {
+	at := d.current()
+	if at < 0 || d.groupOf == nil {
+		return
+	}
+	group := d.groupOf(d.options[at])
+
+	allOn := true
+	for i, o := range d.options {
+		if d.groupOf(o) == group && !d.checked[i] {
+			allOn = false
+			break
+		}
+	}
+	for i, o := range d.options {
+		if d.groupOf(o) == group {
+			d.checked[i] = !allOn
+		}
+	}
+}
+
+// reorder moves the highlighted row, carrying its checkbox with it.
+//
+// It only works on an unfiltered list. With a filter up, "up" would mean the
+// previous visible row while the move happened between two rows that are not
+// adjacent, and the list would rearrange itself in a way nobody asked for.
+func (d *multiSelectDialog) reorder(dir int) {
+	if d.filter != "" {
+		return
+	}
+	at := d.current()
+	to := at + dir
+	if at < 0 || to < 0 || to >= len(d.options) {
+		return
+	}
+	d.options[at], d.options[to] = d.options[to], d.options[at]
+	d.checked[at], d.checked[to] = d.checked[to], d.checked[at]
+	d.cursor += dir
+	d.refilter()
+}
+
+func (d *multiSelectDialog) move(n int) {
+	d.cursor = min(max(d.cursor+n, 0), max(0, len(d.matches)-1))
+}
+
+func (d *multiSelectDialog) view(width int, theme Theme) []string {
+	var out []string
+	if d.message != "" {
+		out = append(out, wrapBlock(d.message, width)...)
+	}
+	out = append(out, theme.Dim.Render("filter: ")+d.filter+theme.Dim.Render("▏"))
+	if len(d.matches) == 0 {
+		return append(out, theme.Dim.Render("  no matches"))
+	}
+
+	start := 0
+	if d.cursor >= d.visible {
+		start = d.cursor - d.visible + 1
+	}
+	end := min(start+d.visible, len(d.matches))
+
+	for i := start; i < end; i++ {
+		at := d.matches[i]
+		box := "[ ] "
+		if d.checked[at] {
+			box = "[x] "
+		}
+		row := box + d.options[at].Label
+		if desc := d.options[at].Description; desc != "" {
+			row += theme.Dim.Render("  " + desc)
+		}
+		if i == d.cursor {
+			out = append(out, theme.Selected.Render("▸ ")+truncateCells(row, width-2))
+			continue
+		}
+		out = append(out, "  "+truncateCells(row, width-2))
+	}
+
+	out = append(out, theme.Dim.Render(counter(d.cursor+1, len(d.matches))+
+		"  ·  "+strconv.Itoa(len(d.selected()))+" selected"))
+	if d.hint != "" {
+		out = append(out, theme.Dim.Render("  "+d.hint))
+	}
+	return out
 }
