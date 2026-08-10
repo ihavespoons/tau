@@ -28,7 +28,7 @@ func (h *harness) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.stack.closeAll()
 			return h, tea.Quit
 		}
-		h.stack.key(msg)
+		h.stack.key(msg, nil)
 	case openDialogMsg:
 		h.stack.push(msg.d)
 	case cancelDialogMsg:

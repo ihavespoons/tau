@@ -74,6 +74,11 @@ func SkillsDir() string     { return filepath.Join(AgentDir(), "skills") }
 func PromptsDir() string    { return filepath.Join(AgentDir(), "prompts") }
 func ThemesDir() string     { return filepath.Join(AgentDir(), "themes") }
 
+// KeybindingsPath is the global keybindings file. Bindings are global only:
+// a project cannot rebind keys, because a repository deciding what Ctrl+C does
+// in someone else's terminal is not a customization anyone asked for.
+func KeybindingsPath() string { return filepath.Join(AgentDir(), "keybindings.json") }
+
 // ProjectDir returns the project-local config directory for cwd (<cwd>/.tau).
 func ProjectDir(cwd string) string { return filepath.Join(cwd, DirName) }
 

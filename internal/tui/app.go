@@ -11,6 +11,7 @@ import (
 	"github.com/ihavespoons/tau/ai"
 	"github.com/ihavespoons/tau/coding"
 	"github.com/ihavespoons/tau/extension"
+	"github.com/ihavespoons/tau/keybindings"
 	"github.com/ihavespoons/tau/slashcmd"
 )
 
@@ -55,6 +56,7 @@ type app struct {
 	cs      *coding.Session
 	bridge  *uiBridge
 	theme   Theme
+	keys    *keybindings.Manager
 	rend    *renderer
 	ed      *editor
 	printer *printer
@@ -85,10 +87,13 @@ type app struct {
 	quitting   bool
 }
 
-func newApp(cs *coding.Session, bridge *uiBridge, theme Theme) *app {
+func newApp(cs *coding.Session, bridge *uiBridge, theme Theme, keys *keybindings.Manager) *app {
+	if keys == nil {
+		keys = keybindings.New(nil)
+	}
 	a := &app{
-		cs: cs, bridge: bridge, theme: theme,
-		ed:        newEditor(theme),
+		cs: cs, bridge: bridge, theme: theme, keys: keys,
+		ed:        newEditor(theme, keys),
 		rend:      newRenderer(theme, 80, cs.Settings.HideThinkingBlock()),
 		liveTools: map[string]*liveTool{},
 		widgets:   map[string]*widgetEntry{},
@@ -123,8 +128,22 @@ func (a *app) banner() []string {
 			}
 		}
 	}
-	lines = append(lines, t.Dim.Render("  /help for commands · Esc stops the agent · Ctrl+C twice to quit"), "")
+	lines = append(lines, t.Dim.Render("  "+a.hints()), "")
 	return lines
+}
+
+// hints is the greeting's key line, built from the live bindings so a rebound
+// key is advertised under its new name. A clause whose action has no key at all
+// is dropped rather than shown pointing at nothing.
+func (a *app) hints() string {
+	parts := []string{"/help for commands"}
+	if k := keyLabel(a.keys, keybindings.AppInterrupt); k != "" {
+		parts = append(parts, k+" stops the agent")
+	}
+	if k := keyLabel(a.keys, keybindings.AppClear); k != "" {
+		parts = append(parts, k+" twice to quit")
+	}
+	return strings.Join(parts, " · ")
 }
 
 // Update implements tea.Model. Everything here runs on the render goroutine,
@@ -241,24 +260,30 @@ func (a *app) setWidget(msg widgetMsg) {
 
 // --- keys ---
 
+// bound reports whether a key triggers a binding.
+func (a *app) bound(key string, id keybindings.Binding) bool {
+	return bound(a.keys, key, id)
+}
+
 func (a *app) onKey(msg tea.KeyMsg) tea.Cmd {
 	// A dialog owns the keyboard while it is open.
-	if a.dialogs.key(msg) {
+	if a.dialogs.key(msg, a.keys) {
 		return nil
 	}
 
+	key := keyID(msg)
 	a.notice = ""
-	if msg.Type != tea.KeyCtrlC {
+	if !a.bound(key, keybindings.AppClear) {
 		a.ctrlCArmed = false
 	}
 
-	// Ctrl+C and Esc always reach tau: interrupt and abort are the two ways out
-	// of a wedged turn, and an extension that could swallow them could make the
+	// Clear and interrupt always reach tau: they are the two ways out of a
+	// wedged turn, and an extension that could swallow them could make the
 	// agent unstoppable. Every other key is claimable — including the built-in
-	// bindings below, so an extension can rebind Ctrl+P — and a shortcut bound
-	// to a bare letter will shadow typing, which is the extension's business.
-	if msg.Type != tea.KeyCtrlC && msg.Type != tea.KeyEsc {
-		if key := msg.String(); a.cs.Extensions != nil && a.cs.Extensions.HasShortcut(key) {
+	// bindings below, so an extension can take Ctrl+P — and a shortcut bound to
+	// a bare letter will shadow typing, which is the extension's business.
+	if !a.bound(key, keybindings.AppClear) && !a.bound(key, keybindings.AppInterrupt) {
+		if key != "" && a.cs.Extensions != nil && a.cs.Extensions.HasShortcut(key) {
 			// Handlers run off the Update goroutine: a shortcut that opens a
 			// dialog would otherwise wait on the loop that has to draw it.
 			return func() tea.Msg {
@@ -268,18 +293,19 @@ func (a *app) onKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	}
 
-	switch msg.Type {
-	case tea.KeyCtrlC:
+	// First match wins. Anything not claimed here falls through to the editor,
+	// which is what lets app.exit and delete-forward share Ctrl+D: the app case
+	// only fires on an empty idle prompt, and the editor takes the key
+	// otherwise.
+	switch {
+	case a.bound(key, keybindings.AppClear):
 		return a.onInterrupt()
 
-	case tea.KeyCtrlD:
-		if a.ed.Empty() && !a.running {
-			a.quitting = true
-			return tea.Quit
-		}
-		return nil
+	case a.bound(key, keybindings.AppExit) && a.ed.Empty() && !a.running:
+		a.quitting = true
+		return tea.Quit
 
-	case tea.KeyEsc:
+	case a.bound(key, keybindings.AppInterrupt):
 		if a.running {
 			res := a.cs.Agent.Abort()
 			if res.ClearedSteer+res.ClearedFollowUp > 0 {
@@ -291,19 +317,35 @@ func (a *app) onKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 
-	case tea.KeyCtrlP:
-		return a.cycleModel(1)
+	case a.bound(key, keybindings.AppSuspend):
+		// tea.Suspend is itself a tea.Cmd: Bubble Tea restores the terminal,
+		// stops the process, and repaints when the shell foregrounds it again.
+		return tea.Suspend
 
-	case tea.KeyCtrlT:
+	case a.bound(key, keybindings.AppModelCycleForward):
+		return a.cycleModel(1)
+	case a.bound(key, keybindings.AppModelCycleBackward):
+		return a.cycleModel(-1)
+
+	case a.bound(key, keybindings.AppThinkingCycle):
 		lvl := a.cs.CycleThinkingLevel(context.Background(), 1)
 		a.notice = "thinking: " + string(lvl)
 		return nil
 
-	case tea.KeyTab:
-		if len(a.completions) > 0 {
-			a.acceptCompletion()
-			return nil
+	case a.bound(key, keybindings.AppThinkingToggle):
+		if a.rend.toggleThinking() {
+			a.notice = "thinking blocks hidden"
+		} else {
+			a.notice = "thinking blocks shown"
 		}
+		return nil
+
+	case a.bound(key, keybindings.AppMessageFollowUp):
+		return a.followUp()
+
+	case a.bound(key, keybindings.InputTab) && len(a.completions) > 0:
+		a.acceptCompletion()
+		return nil
 	}
 
 	submitted, ok := a.ed.Update(msg)
@@ -341,6 +383,35 @@ func (a *app) cycleModel(delta int) tea.Cmd {
 	if m != nil {
 		a.notice = "model: " + m.Provider + "/" + m.ID
 	}
+	return nil
+}
+
+// followUp queues a message for delivery when the agent would otherwise stop,
+// rather than at the next turn boundary the way steering does. Use it for the
+// next thing to work on, when interrupting the current one would only derail it.
+//
+// When nothing is running this acts exactly like submitting, which is Pi's
+// behaviour: there is no turn to follow, so a queued message would sit there
+// with nothing to release it.
+func (a *app) followUp() tea.Cmd {
+	text := a.ed.Value()
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	if !a.running {
+		return a.submit(text)
+	}
+
+	a.ed.Remember(text)
+	a.ed.Reset()
+	a.completions = nil
+	a.emit(append(a.rend.user(text), ""))
+
+	a.cs.Agent.FollowUp(ai.UserMessage{
+		Content:   ai.UserContent{Text: text},
+		Timestamp: time.Now().UnixMilli(),
+	})
+	a.notice = "queued — will be delivered when the agent finishes"
 	return nil
 }
 
@@ -400,7 +471,9 @@ func (a *app) onCommandDone(msg commandMsg) tea.Cmd {
 		a.emit(append(wrapBlock(msg.res.Output, a.width), ""))
 	}
 	if msg.res.SessionChanged {
-		a.rend = newRenderer(a.theme, a.width, a.cs.Settings.HideThinkingBlock())
+		// Carry the live visibility across, not the setting: a session switch
+		// should not silently undo the toggle key the user just pressed.
+		a.rend = newRenderer(a.theme, a.width, a.rend.hideThinking)
 		a.emit(a.replayTranscript())
 	}
 	if msg.res.Quit {

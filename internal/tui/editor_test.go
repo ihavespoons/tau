@@ -8,7 +8,7 @@ import (
 )
 
 func newTestEditor() *editor {
-	e := newEditor(DefaultTheme())
+	e := newEditor(DefaultTheme(), nil)
 	e.SetWidth(60)
 	return e
 }
@@ -72,15 +72,17 @@ func TestPasteWithNewlinesNeverSubmits(t *testing.T) {
 	}
 }
 
-func TestAltEnterInsertsNewline(t *testing.T) {
+// Alt+Enter belongs to the app, not the editor: it queues a follow-up. The
+// editor has to leave it alone entirely — inserting a newline here would put a
+// stray blank line in every message sent that way.
+func TestAltEnterIsNotTheEditors(t *testing.T) {
 	e := newTestEditor()
 	typeText(e, "first")
 	if _, ok := e.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true}); ok {
-		t.Fatal("Alt+Enter must not submit")
+		t.Fatal("Alt+Enter must not submit from the editor")
 	}
-	typeText(e, "second")
-	if got := e.Value(); got != "first\nsecond" {
-		t.Errorf("got %q", got)
+	if got := e.Value(); got != "first" {
+		t.Errorf("Alt+Enter changed the buffer: %q", got)
 	}
 }
 
@@ -198,7 +200,7 @@ func TestRememberSkipsConsecutiveDuplicates(t *testing.T) {
 }
 
 func TestViewShowsPromptGutterAndWraps(t *testing.T) {
-	e := newEditor(DefaultTheme())
+	e := newEditor(DefaultTheme(), nil)
 	e.SetWidth(20)
 	e.SetValue(strings.Repeat("word ", 12))
 

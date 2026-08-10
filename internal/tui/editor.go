@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/ihavespoons/tau/keybindings"
 )
 
 // editor is tau's multi-line input.
@@ -27,10 +28,16 @@ type editor struct {
 	draft   string
 
 	theme Theme
+	keys  *keybindings.Manager
 }
 
-func newEditor(theme Theme) *editor {
-	return &editor{width: 80, theme: theme}
+// newEditor builds the prompt. A nil manager means tau's defaults, which keeps
+// the editor constructible in tests that are not about keys.
+func newEditor(theme Theme, keys *keybindings.Manager) *editor {
+	if keys == nil {
+		keys = keybindings.New(nil)
+	}
+	return &editor{width: 80, theme: theme, keys: keys}
 }
 
 // Value returns the current text.
@@ -75,8 +82,14 @@ func (e *editor) Remember(s string) {
 	e.histIdx = len(e.history)
 }
 
-// Update applies a key. submit is the text to send when the key was Enter on
-// a non-empty buffer; ok reports whether a submission happened.
+// bound reports whether a key triggers a binding.
+func (e *editor) bound(key string, id keybindings.Binding) bool {
+	return bound(e.keys, key, id)
+}
+
+// Update applies a key. submit is the text to send when the key was bound to
+// tui.input.submit on a non-empty buffer; ok reports whether a submission
+// happened.
 func (e *editor) Update(msg tea.KeyMsg) (submit string, ok bool) {
 	// A paste arrives as one key event whose runes may contain newlines. It
 	// must never submit — pasting a multi-line snippet is not a decision to
@@ -86,60 +99,72 @@ func (e *editor) Update(msg tea.KeyMsg) (submit string, ok bool) {
 		return "", false
 	}
 
-	switch msg.Type {
-	case tea.KeyRunes:
+	// Typing beats bindings. A key that produces a character inserts it, and no
+	// keybindings.json gets a say: a config that shadowed the letter "a" would
+	// leave its author unable to type the command that undoes it. Alt-modified
+	// runes are held back, because that is where the word motions live.
+	switch {
+	case msg.Type == tea.KeyRunes && !msg.Alt:
 		e.insert(msg.Runes)
-	case tea.KeySpace:
+		return "", false
+	case msg.Type == tea.KeySpace && !msg.Alt:
 		e.insert([]rune{' '})
-	case tea.KeyEnter:
-		// Alt+Enter and Ctrl+J insert a newline; plain Enter submits.
-		if msg.Alt {
-			e.insert([]rune{'\n'})
-			return "", false
-		}
+		return "", false
+	}
+
+	// First match wins. The order below resolves the overlaps in Pi's defaults
+	// — ctrl+u is delete-to-line-start here rather than a tree filter, and the
+	// word motions are checked before the character ones.
+	key := keyID(msg)
+	switch {
+	case e.bound(key, keybindings.InputSubmit):
 		if e.Empty() {
 			return "", false
 		}
 		return e.Value(), true
-	case tea.KeyCtrlJ:
+
+	case e.bound(key, keybindings.InputNewLine):
 		e.insert([]rune{'\n'})
-	case tea.KeyBackspace:
+
+	case e.bound(key, keybindings.EditorDeleteCharBackward):
 		e.deleteBackward()
-	case tea.KeyDelete:
+	case e.bound(key, keybindings.EditorDeleteCharForward):
 		e.deleteForward()
-	case tea.KeyLeft:
-		if msg.Alt {
-			e.cursor = e.wordStart()
-		} else if e.cursor > 0 {
-			e.cursor--
-		}
-	case tea.KeyRight:
-		if msg.Alt {
-			e.cursor = e.wordEnd()
-		} else if e.cursor < len(e.text) {
-			e.cursor++
-		}
-	case tea.KeyUp:
-		e.moveVertical(-1)
-	case tea.KeyDown:
-		e.moveVertical(1)
-	case tea.KeyHome, tea.KeyCtrlA:
-		e.cursor = e.lineStart()
-	case tea.KeyEnd, tea.KeyCtrlE:
-		e.cursor = e.lineEnd()
-	case tea.KeyCtrlU:
+	case e.bound(key, keybindings.EditorDeleteWordBackward):
+		start := e.wordStart()
+		e.text = append(append([]rune{}, e.text[:start]...), e.text[e.cursor:]...)
+		e.cursor = start
+	case e.bound(key, keybindings.EditorDeleteWordForward):
+		e.text = append(append([]rune{}, e.text[:e.cursor]...), e.text[e.wordEnd():]...)
+	case e.bound(key, keybindings.EditorDeleteToLineStart):
 		// Both bounds have to be read before the buffer shrinks: recomputing
 		// one afterwards would measure the new text with the old cursor.
 		start := e.lineStart()
 		e.text = append(append([]rune{}, e.text[:start]...), e.text[e.cursor:]...)
 		e.cursor = start
-	case tea.KeyCtrlK:
-		end := e.lineEnd()
-		e.text = append(append([]rune{}, e.text[:e.cursor]...), e.text[end:]...)
-	case tea.KeyCtrlW:
-		start := e.wordStart()
-		e.text = append(append([]rune{}, e.text[:start]...), e.text[e.cursor:]...)
-		e.cursor = start
+	case e.bound(key, keybindings.EditorDeleteToLineEnd):
+		e.text = append(append([]rune{}, e.text[:e.cursor]...), e.text[e.lineEnd():]...)
+
+	case e.bound(key, keybindings.EditorCursorWordLeft):
+		e.cursor = e.wordStart()
+	case e.bound(key, keybindings.EditorCursorWordRight):
+		e.cursor = e.wordEnd()
+	case e.bound(key, keybindings.EditorCursorLeft):
+		if e.cursor > 0 {
+			e.cursor--
+		}
+	case e.bound(key, keybindings.EditorCursorRight):
+		if e.cursor < len(e.text) {
+			e.cursor++
+		}
+	case e.bound(key, keybindings.EditorCursorLineStart):
+		e.cursor = e.lineStart()
+	case e.bound(key, keybindings.EditorCursorLineEnd):
+		e.cursor = e.lineEnd()
+	case e.bound(key, keybindings.EditorCursorUp):
+		e.moveVertical(-1)
+	case e.bound(key, keybindings.EditorCursorDown):
+		e.moveVertical(1)
 	}
 	return "", false
 }

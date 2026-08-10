@@ -228,6 +228,61 @@ A theme written for Pi loads in tau and vice versa; copying one out of
 load — a missing token, a variable that refers to nothing — is named at startup
 with the reason, and the rest still load.
 
+## Keybindings
+
+The keys are in `~/.tau/agent/keybindings.json`, mapping a binding id to a key
+or a list of keys:
+
+```json
+{
+  "tui.app.model.cycle": ["ctrl+p", "f2"],
+  "tui.input.submit": "ctrl+s",
+  "tui.app.suspend": []
+}
+```
+
+An empty list unbinds an action entirely. Identifiers are written
+modifier-first — `ctrl+p`, `shift+ctrl+p`, `alt+left` — and modifier order
+carries no meaning, so `shift+ctrl+p` and `ctrl+shift+p` are the same key.
+
+This file is global only. There is no project-level version and no setting that
+introduces one: cloning a repository should not change what Ctrl+C does in your
+terminal.
+
+The ids are Pi's, so a `keybindings.json` copied out of `~/.pi/agent` works
+unchanged. A file that still uses Pi's older flat names is migrated in place the
+first time tau reads it, and anything tau does not recognise is preserved
+verbatim rather than dropped on the rewrite. A binding tau cannot parse — an
+unknown id, a key that names nothing — falls back to its default and is reported
+at startup, along with any two actions that now answer to the same key.
+
+The defaults worth knowing:
+
+| Key | Action |
+|---|---|
+| `enter` | send |
+| `shift+enter`, `ctrl+j` | newline |
+| `alt+enter` | queue a follow-up — sends immediately when nothing is running |
+| `esc` | stop the agent |
+| `ctrl+c` | clear the prompt; twice on an empty one quits |
+| `ctrl+d` | quit, when the prompt is empty and nothing is running |
+| `ctrl+p`, `shift+ctrl+p` | next / previous model |
+| `shift+tab` | cycle the thinking level |
+| `ctrl+t` | show or hide thinking blocks |
+| `ctrl+z` | suspend |
+
+The prompt is a readline: `ctrl+a`/`ctrl+e`, `ctrl+u`/`ctrl+k`, `ctrl+w`,
+`alt+b`/`alt+f`, `alt+d`, and the arrows, all rebindable under `tui.editor.*`.
+Typing always wins — binding an action to a bare letter shadows nothing, because
+a config that made `a` untypeable would leave you unable to type the command
+that undoes it.
+
+Two caveats. `shift+enter` needs a terminal that distinguishes it from `enter`,
+which most do not report to tau yet; `ctrl+j` is the one that always works. And
+the table carries the full set of Pi's ids, but a few actions behind them are
+still landing — external editor, image paste, the kill ring, and undo are P10
+work, so binding those ids does nothing today.
+
 ## Extensions
 
 An extension observes and shapes what the agent does: gate a tool call, rewrite

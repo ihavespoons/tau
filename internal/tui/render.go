@@ -37,6 +37,20 @@ func (r *renderer) setWidth(w int) {
 	r.md.setWidth(w)
 }
 
+// toggleThinking flips thinking-block visibility for the rest of the session,
+// reporting the new hidden state. It does not touch settings: this is the
+// "let me see what it was reasoning about just now" key, not a preference
+// change, and Pi treats it the same way.
+//
+// Only messages rendered after the toggle are affected. What has already been
+// flushed into scrollback is the terminal's, not tau's, and reprinting the
+// transcript to reveal thinking blocks would cost the very thing inline
+// rendering buys.
+func (r *renderer) toggleThinking() bool {
+	r.hideThinking = !r.hideThinking
+	return r.hideThinking
+}
+
 // user renders a submitted prompt.
 func (r *renderer) user(text string) []string {
 	lines := wrapBlock(strings.TrimRight(text, "\n"), r.width-2)

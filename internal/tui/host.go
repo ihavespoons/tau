@@ -13,6 +13,7 @@ import (
 	"github.com/ihavespoons/tau/coding"
 	"github.com/ihavespoons/tau/config"
 	"github.com/ihavespoons/tau/extension"
+	"github.com/ihavespoons/tau/keybindings"
 )
 
 // host implements slashcmd.Interactive: the built-in commands that need to
@@ -24,31 +25,77 @@ import (
 type host struct {
 	cs     *coding.Session
 	bridge *uiBridge
+	keys   *keybindings.Manager
 }
 
 // Hotkeys renders tau's key bindings.
+//
+// The keys are read from the live table rather than written out here, so a
+// rebound key is listed under the name it now answers to and an action someone
+// unbound is not listed at all — a help screen that lied about either would be
+// worse than no help screen.
 func (h *host) Hotkeys() string {
-	rows := [][2]string{
-		{"Enter", "send the message"},
-		{"Alt+Enter / Ctrl+J", "insert a newline"},
-		{"Esc", "stop the agent (in-flight tools still finish)"},
-		{"Ctrl+C", "clear the input, then quit on a second press"},
-		{"Ctrl+D", "quit when the input is empty"},
-		{"Ctrl+P", "cycle to the next model"},
-		{"Ctrl+T", "cycle the thinking level"},
-		{"Tab", "accept the highlighted command completion"},
-		{"Up / Down", "move a line, or step through prompt history"},
-		{"Ctrl+A / Ctrl+E", "start / end of line"},
-		{"Ctrl+W", "delete the previous word"},
-		{"Ctrl+U / Ctrl+K", "kill to start / end of line"},
+	km := h.keys
+	if km == nil {
+		km = fallbackKeys
 	}
+
+	// all lists every key an action answers to. pair takes one key from each of
+	// two actions, for the rows that describe both halves of a motion and would
+	// otherwise read as a pile of alternatives.
+	all := func(id keybindings.Binding) string {
+		var out []string
+		for _, k := range km.Keys(id) {
+			out = append(out, prettyKey(k))
+		}
+		return strings.Join(out, " / ")
+	}
+	first := func(id keybindings.Binding) string {
+		if keys := km.Keys(id); len(keys) > 0 {
+			return prettyKey(keys[0])
+		}
+		return ""
+	}
+	pair := func(a, b keybindings.Binding) string {
+		l, r := first(a), first(b)
+		if l == "" || r == "" {
+			return l + r
+		}
+		return l + " / " + r
+	}
+
+	rows := [][2]string{
+		{all(keybindings.InputSubmit), "send the message"},
+		{all(keybindings.InputNewLine), "insert a newline"},
+		{all(keybindings.AppMessageFollowUp), "queue a follow-up, or send when nothing is running"},
+		{all(keybindings.AppInterrupt), "stop the agent (in-flight tools still finish)"},
+		{all(keybindings.AppClear), "clear the input, then quit on a second press"},
+		{all(keybindings.AppExit), "quit when the input is empty"},
+		{pair(keybindings.AppModelCycleForward, keybindings.AppModelCycleBackward), "next / previous model"},
+		{all(keybindings.AppThinkingCycle), "cycle the thinking level"},
+		{all(keybindings.AppThinkingToggle), "show or hide thinking blocks"},
+		{all(keybindings.AppSuspend), "suspend tau"},
+		{all(keybindings.InputTab), "accept the highlighted command completion"},
+		{pair(keybindings.EditorCursorUp, keybindings.EditorCursorDown), "move a line, or step through prompt history"},
+		{pair(keybindings.EditorCursorLineStart, keybindings.EditorCursorLineEnd), "start / end of line"},
+		{all(keybindings.EditorDeleteWordBackward), "delete the previous word"},
+		{pair(keybindings.EditorDeleteToLineStart, keybindings.EditorDeleteToLineEnd), "kill to start / end of line"},
+	}
+
 	width := 0
 	for _, r := range rows {
-		width = max(width, len(r[0]))
+		if r[0] != "" {
+			width = max(width, displayWidth(r[0]))
+		}
 	}
 	var b strings.Builder
 	for _, r := range rows {
-		fmt.Fprintf(&b, "%-*s  %s\n", width, r[0], r[1])
+		if r[0] == "" {
+			continue
+		}
+		// Padded by display width rather than %-*s: an arrow key is one column
+		// on screen and three bytes in the string.
+		fmt.Fprintf(&b, "%s%s  %s\n", r[0], strings.Repeat(" ", width-displayWidth(r[0])), r[1])
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

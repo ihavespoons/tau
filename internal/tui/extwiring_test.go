@@ -35,7 +35,7 @@ func extApp(t *testing.T, exts ...extension.Extension) (*app, *recorder) {
 		cs:        &coding.Session{Extensions: r},
 		theme:     DefaultTheme(),
 		rend:      newRenderer(DefaultTheme(), 60, false),
-		ed:        newEditor(DefaultTheme()),
+		ed:        newEditor(DefaultTheme(), nil),
 		printer:   p,
 		liveTools: map[string]*liveTool{},
 		widgets:   map[string]*widgetEntry{},

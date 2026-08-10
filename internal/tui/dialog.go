@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ihavespoons/tau/extension"
+	"github.com/ihavespoons/tau/keybindings"
 )
 
 // dialogResult is what a blocked caller receives when a dialog closes.
@@ -24,8 +25,11 @@ type dialogResult struct {
 // asked for one is parked on the reply channel until close() sends, which is
 // what makes the agent pause while the user is being asked something.
 type dialog interface {
-	// key handles a key press, reporting whether the dialog is finished.
-	key(tea.KeyMsg) bool
+	// key handles a key press, reporting whether the dialog is finished. The
+	// manager is passed in rather than stored on each dialog because dialogs are
+	// constructed from four different places, and a modal that missed the
+	// wiring would silently fall back to defaults the user had rebound.
+	key(tea.KeyMsg, *keybindings.Manager) bool
 	// view renders the dialog body.
 	view(width int, theme Theme) []string
 	// close resolves the dialog. It is safe to call more than once.
@@ -53,12 +57,12 @@ func (s *dialogStack) top() dialog {
 
 // key routes a key to the topmost dialog, popping it once it resolves.
 // It reports whether a dialog consumed the key.
-func (s *dialogStack) key(msg tea.KeyMsg) bool {
+func (s *dialogStack) key(msg tea.KeyMsg, km *keybindings.Manager) bool {
 	n := len(s.items)
 	if n == 0 {
 		return false
 	}
-	if s.items[n-1].key(msg) {
+	if s.items[n-1].key(msg, km) {
 		s.items = s.items[:n-1]
 	}
 	return true
@@ -114,17 +118,21 @@ type confirmDialog struct {
 	yes          bool
 }
 
-func (d *confirmDialog) key(msg tea.KeyMsg) bool {
-	switch msg.Type {
-	case tea.KeyLeft, tea.KeyRight, tea.KeyTab:
-		d.yes = !d.yes
-	case tea.KeyEsc:
+// key answers the prompt. Confirm and cancel come from the select bindings, but
+// the left/right toggle is matched literally: there is no tui.* id for "switch
+// button", and a two-option row is not a list to navigate.
+func (d *confirmDialog) key(msg tea.KeyMsg, km *keybindings.Manager) bool {
+	key := keyID(msg)
+	switch {
+	case bound(km, key, keybindings.SelectCancel):
 		d.close(dialogResult{Index: -1})
 		return true
-	case tea.KeyEnter:
+	case bound(km, key, keybindings.SelectConfirm):
 		d.close(dialogResult{Index: boolIndex(d.yes), OK: d.yes})
 		return true
-	case tea.KeyRunes:
+	case key == "left" || key == "right" || bound(km, key, keybindings.InputTab):
+		d.yes = !d.yes
+	case msg.Type == tea.KeyRunes && !msg.Paste:
 		switch strings.ToLower(string(msg.Runes)) {
 		case "y":
 			d.close(dialogResult{Index: 0, OK: true})
@@ -189,12 +197,29 @@ func (d *selectDialog) refilter() {
 	}
 }
 
-func (d *selectDialog) key(msg tea.KeyMsg) bool {
-	switch msg.Type {
-	case tea.KeyEsc, tea.KeyCtrlC:
+func (d *selectDialog) key(msg tea.KeyMsg, km *keybindings.Manager) bool {
+	// Typing beats bindings, exactly as it does in the editor: while a filter is
+	// open every printable key belongs to it, so a model named "p" stays
+	// reachable no matter what tui.app.model.cycle is bound to.
+	if d.filterable && !msg.Paste && !msg.Alt {
+		switch msg.Type {
+		case tea.KeyRunes:
+			d.filter += string(msg.Runes)
+			d.refilter()
+			return false
+		case tea.KeySpace:
+			d.filter += " "
+			d.refilter()
+			return false
+		}
+	}
+
+	key := keyID(msg)
+	switch {
+	case bound(km, key, keybindings.SelectCancel):
 		d.close(dialogResult{Index: -1})
 		return true
-	case tea.KeyEnter:
+	case bound(km, key, keybindings.SelectConfirm):
 		if len(d.matches) == 0 {
 			d.close(dialogResult{Index: -1})
 			return true
@@ -202,32 +227,31 @@ func (d *selectDialog) key(msg tea.KeyMsg) bool {
 		idx := d.matches[d.cursor]
 		d.close(dialogResult{Index: idx, Text: d.options[idx].Value, OK: true})
 		return true
-	case tea.KeyUp, tea.KeyCtrlP:
-		if d.cursor > 0 {
-			d.cursor--
-		}
-	case tea.KeyDown, tea.KeyCtrlN:
-		if d.cursor < len(d.matches)-1 {
-			d.cursor++
-		}
-	case tea.KeyBackspace:
+	case bound(km, key, keybindings.SelectUp):
+		d.move(-1)
+	case bound(km, key, keybindings.SelectDown):
+		d.move(1)
+	case bound(km, key, keybindings.SelectPageUp):
+		// A page is what is on screen, so the row under the cursor lands where
+		// the window's top row was — the motion a reader expects from PgUp.
+		d.move(-max(1, d.visible))
+	case bound(km, key, keybindings.SelectPageDown):
+		d.move(max(1, d.visible))
+	case bound(km, key, keybindings.EditorDeleteCharBackward):
 		if d.filterable && d.filter != "" {
 			r := []rune(d.filter)
 			d.filter = string(r[:len(r)-1])
 			d.refilter()
 		}
-	case tea.KeyRunes, tea.KeySpace:
-		if !d.filterable {
-			return false
-		}
-		if msg.Type == tea.KeySpace {
-			d.filter += " "
-		} else {
-			d.filter += string(msg.Runes)
-		}
-		d.refilter()
 	}
 	return false
+}
+
+// move walks the cursor by n rows, stopping at either end rather than wrapping:
+// a long catalog scrolled past the bottom should sit at the bottom, not jump
+// back to the top under the reader.
+func (d *selectDialog) move(n int) {
+	d.cursor = min(max(d.cursor+n, 0), max(0, len(d.matches)-1))
 }
 
 func (d *selectDialog) view(width int, theme Theme) []string {
@@ -282,41 +306,71 @@ type inputDialog struct {
 	cursor      int
 }
 
-func (d *inputDialog) key(msg tea.KeyMsg) bool {
-	switch msg.Type {
-	case tea.KeyEsc, tea.KeyCtrlC:
+func (d *inputDialog) key(msg tea.KeyMsg, km *keybindings.Manager) bool {
+	// A paste is text, not a decision: an API key arriving from the clipboard
+	// lands in the field whole and never answers the prompt.
+	if msg.Paste {
+		d.insert(msg.Runes)
+		return false
+	}
+	switch {
+	case msg.Type == tea.KeyRunes && !msg.Alt:
+		d.insert(msg.Runes)
+		return false
+	case msg.Type == tea.KeySpace && !msg.Alt:
+		d.insert([]rune{' '})
+		return false
+	}
+
+	key := keyID(msg)
+	switch {
+	case bound(km, key, keybindings.SelectCancel):
 		d.close(dialogResult{Index: -1})
 		return true
-	case tea.KeyEnter:
+	case bound(km, key, keybindings.SelectConfirm):
 		d.close(dialogResult{Index: 0, Text: string(d.value), OK: true})
 		return true
-	case tea.KeyRunes:
-		d.value = append(append(append([]rune{}, d.value[:d.cursor]...), msg.Runes...), d.value[d.cursor:]...)
-		d.cursor += len(msg.Runes)
-	case tea.KeySpace:
-		d.value = append(append(append([]rune{}, d.value[:d.cursor]...), ' '), d.value[d.cursor:]...)
-		d.cursor++
-	case tea.KeyBackspace:
+	case bound(km, key, keybindings.EditorDeleteCharBackward):
 		if d.cursor > 0 {
 			d.value = append(append([]rune{}, d.value[:d.cursor-1]...), d.value[d.cursor:]...)
 			d.cursor--
 		}
-	case tea.KeyLeft:
+	case bound(km, key, keybindings.EditorDeleteCharForward):
+		if d.cursor < len(d.value) {
+			d.value = append(append([]rune{}, d.value[:d.cursor]...), d.value[d.cursor+1:]...)
+		}
+	case bound(km, key, keybindings.EditorCursorLeft):
 		if d.cursor > 0 {
 			d.cursor--
 		}
-	case tea.KeyRight:
+	case bound(km, key, keybindings.EditorCursorRight):
 		if d.cursor < len(d.value) {
 			d.cursor++
 		}
-	case tea.KeyCtrlA, tea.KeyHome:
+	case bound(km, key, keybindings.EditorCursorLineStart):
 		d.cursor = 0
-	case tea.KeyCtrlE, tea.KeyEnd:
+	case bound(km, key, keybindings.EditorCursorLineEnd):
 		d.cursor = len(d.value)
-	case tea.KeyCtrlU:
+	case bound(km, key, keybindings.EditorDeleteToLineStart):
+		// The field is one line, so deleting to its start is a clear — which is
+		// the whole point of the key when a mistyped secret is on screen.
 		d.value, d.cursor = nil, 0
+	case bound(km, key, keybindings.EditorDeleteToLineEnd):
+		d.value = append([]rune{}, d.value[:d.cursor]...)
 	}
 	return false
+}
+
+func (d *inputDialog) insert(rs []rune) {
+	if len(rs) == 0 {
+		return
+	}
+	out := make([]rune, 0, len(d.value)+len(rs))
+	out = append(out, d.value[:d.cursor]...)
+	out = append(out, rs...)
+	out = append(out, d.value[d.cursor:]...)
+	d.value = out
+	d.cursor += len(rs)
 }
 
 func (d *inputDialog) view(width int, theme Theme) []string {

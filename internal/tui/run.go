@@ -20,6 +20,7 @@ import (
 	"github.com/ihavespoons/tau/coding"
 	"github.com/ihavespoons/tau/config"
 	"github.com/ihavespoons/tau/extension"
+	"github.com/ihavespoons/tau/keybindings"
 	"github.com/ihavespoons/tau/theme"
 )
 
@@ -58,7 +59,14 @@ func Run(ctx context.Context, opts Options) error {
 	})
 	cs.Warnings = append(cs.Warnings, warnings...)
 
-	a := newApp(cs, bridge, th)
+	// Keybindings are global-only, so there is nothing project-scoped to merge
+	// and no trust gate to clear: a repository does not get to decide what
+	// Ctrl+C does in someone else's terminal.
+	km, kwarnings := keybindings.Load(config.KeybindingsPath())
+	cs.Warnings = append(cs.Warnings, kwarnings...)
+	h.keys = km
+
+	a := newApp(cs, bridge, th, km)
 
 	prog := tea.NewProgram(a)
 	bridge.attach(prog)
