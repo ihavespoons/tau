@@ -670,6 +670,33 @@ Entries are stored as the bytes they were written as and replayed through the
 same decoder and the same `session.Index` the file backend uses, so the two can
 never disagree about what a session means.
 
+## Editors: the Agent Client Protocol
+
+`tau --mode acp` speaks the [Agent Client Protocol](https://agentclientprotocol.com),
+so an editor that already drives ACP agents can drive tau. The editor launches
+it as a subprocess and talks JSON-RPC 2.0 over stdin and stdout, one message per
+line.
+
+```sh
+tau --mode acp
+```
+
+`initialize`, `session/new`, `session/prompt` and `session/cancel` are
+implemented, against schema v1. A turn streams back as `session/update`
+notifications — `agent_message_chunk` for prose, `agent_thought_chunk` for
+thinking, `tool_call` and `tool_call_update` as tools run — and ends with the
+stop reason the protocol asks for. Images in a prompt are accepted; that is what
+the `image` prompt capability advertises.
+
+There is no session up front, unlike `--mode rpc`: the editor names a working
+directory per `session/new` and may open several in the one process.
+
+Two things are deliberately not claimed. `loadSession` is advertised as false,
+because an ACP session id is not a tau session file and promising a resume that
+cannot happen is worse than not offering it. And tau never sends
+`session/request_permission`, because tau does not gate tools at all — see
+below.
+
 ## The server (experimental)
 
 `tau server` supervises several agents at once and hands them out over HTTP:

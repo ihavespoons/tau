@@ -4,6 +4,31 @@ All notable changes to tau are recorded here. Versions follow
 [semantic versioning](https://semver.org/); the `0.x` series is pre-1.0, so
 minor bumps may still change behaviour.
 
+## [0.32.0] - 2026-08-10
+
+- `tau --mode acp` speaks the Agent Client Protocol, so an editor that drives
+  ACP agents can drive tau. JSON-RPC 2.0 over stdio, one message per line,
+  against schema v1.
+- `initialize`, `session/new`, `session/prompt` and `session/cancel`. A turn
+  streams back as `session/update` notifications — `agent_message_chunk`,
+  `agent_thought_chunk`, `tool_call`, `tool_call_update` — and ends with a stop
+  reason. Images in a prompt are accepted and advertised.
+- No session up front, unlike `--mode rpc`: the editor names a working directory
+  per `session/new` and may open several in one process.
+- `loadSession` is advertised as false and tau never sends
+  `session/request_permission`. An ACP session id is not a tau session file, and
+  tau does not gate tools at all — claiming either would be a promise it does
+  not keep.
+- Cancelling answers the in-flight prompt with the `cancelled` stop reason
+  rather than an error, which is what the protocol requires even when the cancel
+  tore something underneath.
+- The protocol constants are taken from the published schema rather than
+  written from memory: method names, the update discriminators, stop reasons and
+  tool statuses all come from `schema-v1.20.0`.
+- Verified end to end against the built binary for `initialize` and
+  `session/new`. **A full prompt turn has not yet been driven by a real ACP
+  client** — that is the outstanding check.
+
 ## [0.31.0] - 2026-08-10
 
 - `tau server`: a supervisor that owns several agents at once and hands them out

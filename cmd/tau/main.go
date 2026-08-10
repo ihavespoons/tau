@@ -92,7 +92,7 @@ func printMode(args []string) error {
 		cont      = fs.Bool("continue", false, "continue the most recent session for this directory")
 		sessPath  = fs.String("session", "", "resume a specific session file")
 		verbose   = fs.Bool("verbose", false, "show tool calls and usage")
-		mode      = fs.String("mode", "text", "output mode: text|json|rpc")
+		mode      = fs.String("mode", "text", "output mode: text|json|rpc|acp")
 		approve   = fs.Bool("approve", false, "trust this project's .tau resources")
 		noApprove = fs.Bool("no-approve", false, "do not trust this project's .tau resources")
 		exts      repeatedFlag
@@ -110,6 +110,7 @@ usage:
   tau -p -c "prompt"     continue the most recent session here
   tau -e ./my-ext.ts     load an extension (repeatable)
   tau --mode rpc         drive tau over JSONL on stdin/stdout
+  tau --mode acp         serve the Agent Client Protocol on stdin/stdout
   tau login [provider]   log in (default: anthropic; an unknown name lists the rest)
   tau login -k           store an API key instead
   tau logout [provider]  remove stored credentials
@@ -136,7 +137,7 @@ flags:
 	// Reading it to EOF looking for a piped prompt would block forever against
 	// a client that is holding the pipe open to send commands — which is every
 	// client.
-	if prompt == "" && *mode != "rpc" {
+	if prompt == "" && *mode != "rpc" && *mode != "acp" {
 		stat, _ := os.Stdin.Stat()
 		if stat != nil && stat.Mode()&os.ModeCharDevice == 0 {
 			piped = true
@@ -157,6 +158,22 @@ flags:
 	} else if *noApprove {
 		no := false
 		trustOverride = &no
+	}
+
+	// acp is driven from stdin like rpc, but has no session up front: the
+	// client names a working directory with session/new and may open several.
+	if *mode == "acp" {
+		return runACPMode(ctx, coding.Options{
+			ModelID:       *modelID,
+			ThinkingLevel: ai.ModelThinkingLevel(*thinking),
+			SystemPrompt:  *system,
+			NoTools:       *noTools,
+			NoSession:     *noSession,
+			Mode:          extension.ModeRPC,
+			TrustOverride: trustOverride,
+			Changelog:     tau.Changelog,
+			Extensions:    bundledExtensions(),
+		})
 	}
 
 	// rpc is driven entirely from stdin, so it is the one mode that starts
