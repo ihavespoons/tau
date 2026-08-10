@@ -170,6 +170,29 @@ A session is an append-only tree, not a list. Nothing is ever deleted:
 Going back offers to summarize the branch being left, so the next turn knows the
 exploration happened instead of silently losing it.
 
+In the interface `/tree` opens a picker over the whole tree rather than a list
+of your own messages, because a tool result is where a session went wrong often
+enough that it has to be reachable. Five views decide what is on screen —
+`ctrl+o` cycles them, or go straight to one:
+
+```
+ctrl+d    default: everything except bookkeeping entries
+ctrl+t    hide tool results as well
+ctrl+u    your messages only
+ctrl+l    labelled entries only
+ctrl+a    everything, including model switches and leaf moves
+```
+
+Each of those keys toggles, so pressing it again returns to the default view.
+`ctrl+left` folds the branch under the cursor and `ctrl+right` unfolds it; with
+nothing to fold they move a row instead. `shift+l` labels the highlighted entry
+— an emptied prompt clears the label — and `shift+t` shows when each label was
+set. Typing searches the summaries and the labels, and the first `escape` takes
+the search back rather than closing the picker.
+
+Narrowing a view usually hides the row under the cursor. It lands on that row's
+nearest visible ancestor instead of jumping to the top, so you keep your place.
+
 ## Coming from Pi
 
 `tau import` reads `~/.pi/agent` and reports what is there. Nothing is copied
@@ -343,6 +366,15 @@ a confirmation. Every one of them closes the picker, does the thing, and opens
 it again on a fresh listing. `ctrl+backspace` also deletes, but only while the
 filter is empty — with nothing typed there is no text for backspace to remove,
 which is what makes the key safe to reuse there.
+
+The session-tree picker (`/tree`) has its own set — views, folding and labels —
+described under [Session trees](#session-trees). `shift+l` and `shift+t` work
+there because a capital letter and `shift+<letter>` are now understood as one
+key; a terminal cannot spell the second, it just sends the character shift
+produced. `shift+ctrl+o`, the backward cycle, is the exception: terminals send
+the same byte for `ctrl+o` with and without shift, so it only fires on terminals
+that speak a protocol tau does not yet read. Cycling forward wraps, so nothing
+is unreachable.
 
 Three caveats. `shift+enter` needs a terminal that distinguishes it from
 `enter`, which most do not report to tau yet; `ctrl+j` is the one that always

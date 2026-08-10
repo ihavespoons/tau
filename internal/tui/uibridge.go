@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/ihavespoons/tau/coding"
 	"github.com/ihavespoons/tau/extension"
 	"github.com/ihavespoons/tau/keybindings"
 )
@@ -211,6 +212,54 @@ func (b *uiBridge) multiSelect(ctx context.Context, req extension.SelectRequest,
 		return nil, false, err
 	}
 	return res.Indices, res.OK, nil
+}
+
+// treeRequest is what opening the session-tree picker needs beyond the rows.
+type treeRequest struct {
+	title   string
+	message string
+	rows    []coding.TreeEntry
+	// filter is the view to open in, so reopening after an action lands the
+	// reader back in the view they were using rather than the default.
+	filter treeFilter
+	// actions close the picker and report themselves, per selectActions.
+	actions []keybindings.Binding
+	hint    string
+}
+
+// tree opens the session-tree picker and reports the chosen entry.
+//
+// It is internal for the same reason selectWith is: the rows are session
+// entries, and an extension has no way to say what one of them is.
+func (b *uiBridge) tree(ctx context.Context, req treeRequest) (coding.TreeEntry, treeFilter, keybindings.Binding, error) {
+	reply := newReply()
+	d := &treeDialog{
+		baseDialog: baseDialog{reply: reply, heading: req.title, message: req.message},
+		rows:       req.rows,
+		filter:     req.filter,
+		visible:    b.rows(),
+		actions:    req.actions,
+		hint:       req.hint,
+	}
+	d.refilter()
+	// Open on the current position rather than the top: the tree is opened to
+	// go back from where the conversation is.
+	for _, e := range req.rows {
+		if e.Current {
+			d.cursor = d.nearestVisible(e.ID)
+			d.anchor = e.ID
+			break
+		}
+	}
+
+	res, err := b.ask(ctx, d, reply)
+	if err != nil {
+		return coding.TreeEntry{}, d.filter, "", err
+	}
+	if !res.OK || res.Index < 0 || res.Index >= len(req.rows) {
+		return coding.TreeEntry{}, d.filter, "", nil
+	}
+	return req.rows[res.Index], d.filter, res.Action, nil
 }
 
 // Input implements extension.UI.

@@ -4,6 +4,29 @@ All notable changes to tau are recorded here. Versions follow
 [semantic versioning](https://semver.org/); the `0.x` series is pre-1.0, so
 minor bumps may still change behaviour.
 
+## [0.26.0] - 2026-08-10
+
+- `/tree` opens a picker over the whole session tree instead of a list of your
+  own messages. A tool result is where a session went wrong often enough that it
+  has to be reachable, and a compaction is a place you can be sitting on.
+- Five views, cycled with `ctrl+o` or reached directly: default, no tool
+  results, your messages only, labelled only, and everything. Each key toggles
+  back to the default, so no view is a trap. `ctrl+left` and `ctrl+right` fold
+  and unfold a branch, and move a row when there is nothing to fold.
+- `shift+l` labels the highlighted entry from inside the picker; `shift+t` shows
+  when each label was set. Typing searches summaries and labels, and the first
+  `escape` takes the search back rather than closing the picker.
+- A capital letter and `shift+<letter>` are now understood as one key. A
+  terminal cannot spell the second — it sends the character shift produced — so
+  Pi's `shift+` defaults previously could not fire at all. `A` and `a` remain
+  different keys, and `Ctrl+Q` still means `ctrl+q`, because case in an
+  identifier that spells its own modifiers is a human writing a config.
+- Narrowing a view leaves the cursor on the nearest visible ancestor of the row
+  it was on, rather than at the top.
+- Indentation in the tree marks branch points rather than message count, so a
+  conversation that never forked stays flat instead of walking off the right
+  edge one message at a time.
+
 ## [0.25.0] - 2026-08-10
 
 - `/scoped-models` opens a checklist. Space ticks a model, `ctrl+p` ticks a

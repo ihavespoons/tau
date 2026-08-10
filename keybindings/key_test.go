@@ -27,3 +27,28 @@ func TestBackspaceIsNotCtrlH(t *testing.T) {
 		t.Error("backspace and ctrl+h collapsed into one key")
 	}
 }
+
+// The same shape of bug one letter over: a terminal cannot say "shift+l", it
+// sends the character shift produced and the TUI layer reports "L". Pi's
+// defaults for the tree picker spell it "shift+l", so without folding the two
+// together neither app.tree.editLabel nor app.tree.toggleLabelTimestamp could
+// ever fire.
+func TestACapitalLetterIsShiftPlusThatLetter(t *testing.T) {
+	if !SameKey("L", "shift+l") {
+		t.Error("a press reported as L does not match a binding written shift+l")
+	}
+	if !New(nil).Matches("L", AppTreeEditLabel) {
+		t.Error("shift+l is the default for app.tree.editLabel, but pressing it does nothing")
+	}
+	if !New(nil).Matches("T", AppTreeToggleLabelTimestamp) {
+		t.Error("shift+t is the default for app.tree.toggleLabelTimestamp, but pressing it does nothing")
+	}
+}
+
+// Folding shift onto the letter must not fold the letter onto itself: these
+// are two different bytes and a binding on one must not answer the other.
+func TestALowercaseLetterIsNotItsCapital(t *testing.T) {
+	if SameKey("l", "L") {
+		t.Error("l and L collapsed into one key")
+	}
+}

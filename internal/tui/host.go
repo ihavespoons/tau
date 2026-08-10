@@ -383,37 +383,55 @@ func (h *host) deleteFromPicker(ctx context.Context, meta session.Metadata) erro
 	return nil
 }
 
-// NavigateTree opens the branch picker and moves to the choice.
+// NavigateTree opens the session tree and moves to the choice.
 //
-// The offer is user messages, not every entry: a branch point is a request the
-// user made, and offering the assistant's replies as destinations would ask
-// them to pick a place in the middle of an answer.
+// The offer is every entry, filtered by the view the reader picks, rather than
+// the user messages alone: a tool result is where a session went wrong often
+// enough that it has to be reachable, and a compaction is a place you can be
+// sitting on. What the default view hides is bookkeeping, not conversation.
+//
+// The picker runs as a loop because acting on a row — labelling it — has to
+// close it first. Opening an input from inside a dialog's own key handler would
+// nest a modal inside another while the goroutine that asked for the first is
+// parked on its reply channel, which is the deadlock the design avoids.
 func (h *host) NavigateTree(ctx context.Context) (string, error) {
-	points, err := h.cs.UserPrompts(ctx)
-	if err != nil {
-		return "", err
-	}
-	if len(points) == 0 {
-		return "", errors.New("this session has no history to navigate")
-	}
+	// The view survives a label edit, so reopening lands the reader back where
+	// they were rather than in the default view.
+	view := treeFilterDefault
+	for {
+		rows, err := h.cs.TreeEntries(ctx)
+		if err != nil {
+			return "", err
+		}
+		if len(rows) == 0 {
+			return "", errors.New("this session has no history to navigate")
+		}
 
-	opts := make([]extension.SelectOption, 0, len(points))
-	for _, p := range points {
-		opts = append(opts, extension.SelectOption{
-			Label: p.Text, Description: p.EntryID, Value: p.EntryID,
+		chosen, filter, action, err := h.bridge.tree(ctx, treeRequest{
+			title:   "Go back to",
+			message: "The conversation continues from here. Later branches stay in the file.",
+			rows:    rows,
+			filter:  view,
+			actions: []keybindings.Binding{keybindings.AppTreeEditLabel},
+			hint:    h.treeHints(),
 		})
-	}
-	idx, err := h.bridge.Select(ctx, extension.SelectRequest{
-		Title:      "Go back to",
-		Message:    "The conversation continues from here. Later branches stay in the file.",
-		Options:    opts,
-		Initial:    len(opts) - 1,
-		Filterable: true,
-	})
-	if err != nil || idx < 0 {
-		return "", err
-	}
+		view = filter
+		if err != nil || chosen.ID == "" {
+			return "", err
+		}
 
+		if action == keybindings.AppTreeEditLabel {
+			if err := h.labelFromTree(ctx, chosen); err != nil {
+				return "", err
+			}
+			continue
+		}
+		return h.moveToEntry(ctx, chosen.ID)
+	}
+}
+
+// moveToEntry rewinds the conversation, asking first about the cost.
+func (h *host) moveToEntry(ctx context.Context, entryID string) (string, error) {
 	// Summarizing costs a request, so it is asked rather than assumed — unless
 	// settings already answered.
 	summarize := false
@@ -432,7 +450,7 @@ func (h *host) NavigateTree(ctx context.Context) (string, error) {
 		summarize = choice == 0
 	}
 
-	result, err := h.cs.MoveTo(ctx, opts[idx].Value, summarize)
+	result, err := h.cs.MoveTo(ctx, entryID, summarize)
 	if err != nil {
 		return "", err
 	}
@@ -440,6 +458,41 @@ func (h *host) NavigateTree(ctx context.Context) (string, error) {
 		return "Moved back, and summarized the branch left behind.", nil
 	}
 	return "Moved back.", nil
+}
+
+// labelFromTree bookmarks the highlighted entry. An emptied prompt clears the
+// label, which is the only way to take one off from the picker.
+func (h *host) labelFromTree(ctx context.Context, e coding.TreeEntry) error {
+	label, err := h.bridge.Input(ctx, extension.InputRequest{
+		Title:       "Label this entry",
+		Message:     e.Summary,
+		Placeholder: "something you will search for later",
+		Initial:     e.Label,
+	})
+	if err != nil {
+		return nil
+	}
+	if err := h.cs.SetEntryLabel(ctx, e.ID, strings.TrimSpace(label)); err != nil {
+		h.bridge.Notify(extension.Notification{Level: extension.NotifyError, Message: err.Error()})
+	}
+	return nil
+}
+
+func (h *host) treeHints() string {
+	var parts []string
+	for _, a := range []struct {
+		b     keybindings.Binding
+		label string
+	}{
+		{keybindings.AppTreeFilterCycleForward, "view"},
+		{keybindings.AppTreeFoldOrUp, "fold"},
+		{keybindings.AppTreeEditLabel, "label"},
+	} {
+		if k := keyLabel(h.keys, a.b); k != "" {
+			parts = append(parts, k+" "+a.label)
+		}
+	}
+	return strings.Join(parts, " · ")
 }
 
 // SelectForkPoint opens the fork picker and forks at the choice.

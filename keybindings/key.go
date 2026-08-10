@@ -1,6 +1,9 @@
 package keybindings
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // Key is a parsed key identifier: a base key plus its modifiers.
 //
@@ -60,11 +63,19 @@ func ParseKey(id string) (Key, bool) {
 		// The base key is whatever is last, so a lone "+" or a trailing
 		// "ctrl++" binds the plus key rather than parsing as a modifier.
 		if i == len(parts)-1 || part == "" {
-			k.Name = canonicalBase(strings.Join(parts[i:], "+"))
+			base := strings.Join(parts[i:], "+")
+			k.Name = canonicalBase(base)
 			// A modifier in the base position means the identifier named no
 			// key at all — "ctrl", "ctrl+alt". Nothing can press that.
 			if k.Name == "" || isModifier(k.Name) {
 				return Key{}, false
+			}
+			// Only when nothing was written in front of it: an identifier that
+			// spells its own modifiers is a human writing a config, where case
+			// is spelling — "Ctrl+Q" means ctrl+q. A bare capital is the other
+			// thing, a terminal reporting the character shift produced.
+			if i == 0 && isUpperLetter(base) {
+				k.Shift = true
 			}
 			return k.normalize(), true
 		}
@@ -104,6 +115,21 @@ func canonicalModifier(name string) string {
 		return alias
 	}
 	return mod
+}
+
+// isUpperLetter reports a base key written as a single capital letter.
+//
+// A terminal has no way to say "shift+l": it sends the character the shift key
+// produced, and the TUI layer reports that as "L". So an uppercase letter and
+// "shift+l" are two spellings of one press, and folding them together here is
+// what lets Pi's shift+ defaults fire at all — without it they parse to a key
+// with Shift set that nothing a terminal sends can ever match.
+//
+// Only letters. A shifted digit or symbol produces a different character
+// entirely ("!" not "shift+1"), which is already its own base key.
+func isUpperLetter(base string) bool {
+	r := []rune(base)
+	return len(r) == 1 && unicode.IsUpper(r[0]) && unicode.IsLetter(r[0])
 }
 
 func isModifier(name string) bool {

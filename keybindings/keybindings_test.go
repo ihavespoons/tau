@@ -116,8 +116,15 @@ func TestParseKey(t *testing.T) {
 		want Key
 	}{
 		{"a", Key{Name: "a"}},
-		{"A", Key{Name: "a"}},
+		// A bare capital is a terminal reporting the character shift produced,
+		// not a louder spelling of "a": the two are different bytes, and a
+		// binding on one must not fire on the other.
+		{"A", Key{Name: "a", Shift: true}},
+		{"shift+a", Key{Name: "a", Shift: true}},
 		{"ctrl+p", Key{Name: "p", Ctrl: true}},
+		// With modifiers written out it is a human writing a config, where case
+		// is spelling — and a terminal cannot distinguish ctrl+p from ctrl+P
+		// anyway, because control codes carry no case.
 		{"Ctrl+P", Key{Name: "p", Ctrl: true}},
 		{"shift+ctrl+p", Key{Name: "p", Ctrl: true, Shift: true}},
 		{"ctrl+shift+p", Key{Name: "p", Ctrl: true, Shift: true}},
