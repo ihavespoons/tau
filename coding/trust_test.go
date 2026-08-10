@@ -8,6 +8,7 @@ import (
 
 	"github.com/ihavespoons/tau/agent"
 	"github.com/ihavespoons/tau/config"
+	"github.com/ihavespoons/tau/prompttemplate"
 )
 
 // writeProjectSkill plants a project-local skill that injects a marker into
@@ -32,14 +33,53 @@ func TestUntrustedProjectSkillsAreNotLoaded(t *testing.T) {
 	t.Setenv(config.EnvAgentDir, agentDir)
 	writeProjectSkill(t, cwd, "MARKER_UNTRUSTED")
 
-	untrusted := buildSystemPrompt(cwd, []agent.Tool{}, false, Options{})
-	if strings.Contains(untrusted, "MARKER_UNTRUSTED") {
-		t.Error("an untrusted project's skills leaked into the system prompt")
+	prompt := func(trusted bool) string {
+		set, err := loadSettings(cwd, trusted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res := loadResources(cwd, trusted, set, Options{})
+		return buildSystemPrompt(cwd, []agent.Tool{}, res.skills, Options{})
 	}
 
-	trusted := buildSystemPrompt(cwd, []agent.Tool{}, true, Options{})
-	if !strings.Contains(trusted, "MARKER_UNTRUSTED") {
+	if strings.Contains(prompt(false), "MARKER_UNTRUSTED") {
+		t.Error("an untrusted project's skills leaked into the system prompt")
+	}
+	if !strings.Contains(prompt(true), "MARKER_UNTRUSTED") {
 		t.Error("a trusted project's skills should load")
+	}
+}
+
+// The same gate covers prompt templates: a template is a slash command that
+// expands to whatever the project wrote, which is instruction injection with
+// an extra keystroke in front of it.
+func TestUntrustedProjectPromptsAreNotLoaded(t *testing.T) {
+	cwd := t.TempDir()
+	agentDir := t.TempDir()
+	t.Setenv(config.EnvAgentDir, agentDir)
+
+	dir := filepath.Join(cwd, ".tau", "prompts")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "---\ndescription: injected\n---\n\nMARKER_PROMPT\n"
+	if err := os.WriteFile(filepath.Join(dir, "injected.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	load := func(trusted bool) []prompttemplate.Template {
+		set, err := loadSettings(cwd, trusted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return loadResources(cwd, trusted, set, Options{}).prompts
+	}
+
+	if got := load(false); len(got) != 0 {
+		t.Errorf("an untrusted project's prompt templates were loaded: %+v", got)
+	}
+	if got := load(true); len(got) != 1 || got[0].Name != "injected" {
+		t.Errorf("a trusted project's prompt templates should load, got %+v", got)
 	}
 }
 

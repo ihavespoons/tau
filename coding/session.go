@@ -21,6 +21,7 @@ import (
 	"github.com/ihavespoons/tau/extension"
 	"github.com/ihavespoons/tau/models"
 	"github.com/ihavespoons/tau/prompt"
+	"github.com/ihavespoons/tau/prompttemplate"
 	"github.com/ihavespoons/tau/session"
 	"github.com/ihavespoons/tau/settings"
 	"github.com/ihavespoons/tau/skills"
@@ -82,6 +83,12 @@ type Session struct {
 	Models *models.Registry
 	// Settings is the merged global+project configuration.
 	Settings *settings.Resolved
+	// Skills are the discovered Agent Skills. They appear in the system prompt
+	// and, unless disabled, as /skill:<name> commands.
+	Skills []skills.Skill
+	// Prompts are the discovered prompt templates, each registered as a slash
+	// command that expands to its body.
+	Prompts []prompttemplate.Template
 	// Commands is the slash-command registry for this session.
 	Commands *slashcmd.Registry
 	// UI is the host's interactive surface; never nil.
@@ -113,10 +120,78 @@ type Session struct {
 // commands.
 func envExecOptions() env.ExecOptions { return env.ExecOptions{Timeout: 2 * time.Minute} }
 
+// resources are the user-authored assets discovered for a session: skills and
+// prompt templates. They are loaded once, because both the system prompt and
+// the command registry need them and scanning twice can disagree.
+type resources struct {
+	skills   []skills.Skill
+	prompts  []prompttemplate.Template
+	warnings []string
+}
+
+// loadResources discovers skills and prompt templates.
+//
+// Project-scoped discovery is behind the trust gate. A skill injects text into
+// the system prompt and a prompt template becomes a slash command that expands
+// to arbitrary instructions, so an untrusted checkout gets neither — otherwise
+// cloning a repository would be enough to steer the agent.
+func loadResources(cwd string, trusted bool, set *settings.Resolved, opts Options) resources {
+	scanCwd := cwd
+	if !trusted {
+		scanCwd = ""
+	}
+
+	var res resources
+	if !opts.NoSkills {
+		loaded := skills.Load(skills.LoadOptions{
+			Cwd: scanCwd, AgentDir: config.AgentDir(), IncludeDefaults: true,
+			Paths: set.SkillPaths(),
+		})
+		res.skills = loaded.Skills
+		for _, d := range loaded.Diagnostics {
+			res.warnings = append(res.warnings, fmt.Sprintf("skill %s: %s", d.Path, d.Message))
+		}
+	}
+
+	res.prompts = prompttemplate.Load(prompttemplate.LoadOptions{
+		Cwd: scanCwd, AgentDir: config.AgentDir(), IncludeDefaults: true,
+		Paths: set.PromptPaths(),
+	})
+	return res
+}
+
+// refreshResources re-scans skills and prompt templates and rebuilds anything
+// derived from them: the command registry and the system prompt's skill list.
+//
+// The trust decision is not revisited. It was made for this directory at
+// startup, and a rescan is not the moment to re-ask a question the user has
+// already answered.
+func (s *Session) refreshResources() {
+	res := loadResources(s.Cwd, s.Trust.Trusted, s.Settings, s.opts)
+	s.Skills, s.Prompts = res.skills, res.prompts
+	s.Warnings = append(s.Warnings, res.warnings...)
+
+	s.mu.Lock()
+	toolset := append([]agent.Tool{}, s.allTools...)
+	s.mu.Unlock()
+
+	// Rebuilt rather than patched, for the same reason the tool list is: a
+	// command whose skill file was deleted has to stop being callable.
+	s.Commands = s.buildCommands()
+
+	if s.Agent != nil {
+		sp := buildSystemPrompt(s.Cwd, toolset, res.skills, s.opts)
+		s.Agent.SetSystemPrompt(sp)
+		if s.Extensions != nil {
+			s.Extensions.SetSystemPrompt(sp)
+		}
+	}
+}
+
 // buildSystemPrompt assembles the run's system prompt from the active tools'
 // declared snippets and guidelines, the project's AGENTS.md/CLAUDE.md files,
 // and any discovered skills.
-func buildSystemPrompt(cwd string, toolset []agent.Tool, trusted bool, opts Options) string {
+func buildSystemPrompt(cwd string, toolset []agent.Tool, skillList []skills.Skill, opts Options) string {
 	po := prompt.Options{
 		CustomPrompt:       opts.SystemPrompt,
 		AppendSystemPrompt: opts.AppendSystemPrompt,
@@ -133,19 +208,7 @@ func buildSystemPrompt(cwd string, toolset []agent.Tool, trusted bool, opts Opti
 	}
 
 	po.ContextFiles = prompt.LoadContextFiles(cwd, config.AgentDir())
-
-	// Project-local skills are gated: an untrusted directory must not inject
-	// instructions into the system prompt.
-	if !opts.NoSkills {
-		skillCwd := cwd
-		if !trusted {
-			skillCwd = ""
-		}
-		res := skills.Load(skills.LoadOptions{
-			Cwd: skillCwd, AgentDir: config.AgentDir(), IncludeDefaults: true,
-		})
-		po.Skills = res.Skills
-	}
+	po.Skills = skillList
 
 	return prompt.Build(po)
 }
@@ -191,7 +254,8 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 		toolset = tools.CodingTools(e)
 	}
 
-	systemPrompt := buildSystemPrompt(cwd, toolset, tr.Trusted, opts)
+	res := loadResources(cwd, tr.Trusted, set, opts)
+	systemPrompt := buildSystemPrompt(cwd, toolset, res.skills, opts)
 
 	ui := opts.UI
 	if ui == nil {
@@ -201,7 +265,8 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 	cs := &Session{
 		Env: e, Model: model, Trust: tr, Cwd: cwd,
 		Models: reg, Settings: set, UI: ui, store: store, opts: opts,
-		Warnings: modelWarnings,
+		Skills: res.skills, Prompts: res.prompts,
+		Warnings: append(modelWarnings, res.warnings...),
 	}
 
 	// Restore transcript from disk when resuming.

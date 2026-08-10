@@ -83,6 +83,11 @@ type SnapshotCommand struct {
 // but they share the runner with the reloaded ones, and rebuilding half of it
 // would leave the surviving half bound to a runner nothing dispatches through.
 func (s *Session) ReloadExtensions(ctx context.Context) error {
+	// Resources are re-scanned whether or not extensions are configured. The
+	// reason to run /reload is that something on disk changed, and an edited
+	// skill is as much a reason as an edited extension.
+	defer s.refreshResources()
+
 	if s.opts.ExternalExtensions == nil && len(s.opts.Extensions) == 0 {
 		return nil
 	}

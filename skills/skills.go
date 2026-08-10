@@ -123,16 +123,31 @@ func LoadFromFile(path, source string) (*Skill, []Diagnostic) {
 // Discovery rules (skills.ts:160-167): a directory containing SKILL.md is a
 // skill root and is not descended into; otherwise direct .md children of the
 // root are loaded and subdirectories are searched for SKILL.md.
+//
+// .gitignore, .ignore, and .fdignore files encountered along the way are
+// honored, each governing its own subtree.
 func LoadFromDir(dir, source string) Result {
-	return loadFromDir(dir, source, true)
+	return loadFromDir(dir, source, true, &ignoreRules{}, dir)
 }
 
-func loadFromDir(dir, source string, includeRootFiles bool) Result {
+func loadFromDir(dir, source string, includeRootFiles bool, rules *ignoreRules, root string) Result {
 	var res Result
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return res
+	}
+
+	// Rules declared here apply to everything below, so they have to be read
+	// before the entries are judged.
+	loadIgnoreFiles(rules, dir, root)
+
+	ignored := func(full string, isDir bool) bool {
+		rel, err := filepath.Rel(root, full)
+		if err != nil {
+			return false
+		}
+		return rules.ignores(rel, isDir)
 	}
 
 	// A SKILL.md here makes this a skill root: load it and stop.
@@ -142,7 +157,7 @@ func loadFromDir(dir, source string, includeRootFiles bool) Result {
 		}
 		full := filepath.Join(dir, e.Name())
 		info, err := os.Stat(full)
-		if err != nil || !info.Mode().IsRegular() {
+		if err != nil || !info.Mode().IsRegular() || ignored(full, false) {
 			continue
 		}
 		skill, diags := LoadFromFile(full, source)
@@ -163,9 +178,12 @@ func loadFromDir(dir, source string, includeRootFiles bool) Result {
 		if err != nil {
 			continue
 		}
+		if ignored(full, info.IsDir()) {
+			continue
+		}
 
 		if info.IsDir() {
-			sub := loadFromDir(full, source, false)
+			sub := loadFromDir(full, source, false, rules, root)
 			res.Skills = append(res.Skills, sub.Skills...)
 			res.Diagnostics = append(res.Diagnostics, sub.Diagnostics...)
 			continue
@@ -205,12 +223,21 @@ func Load(opts LoadOptions) Result {
 	}
 
 	byName := map[string]Skill{}
+	realPaths := map[string]bool{}
 	var order []string
 	var diags, collisions []Diagnostic
 
 	add := func(r Result) {
 		diags = append(diags, r.Diagnostics...)
 		for _, s := range r.Skills {
+			// Two paths that resolve to the same file are one skill, not a
+			// collision. Symlinking a skill directory into a second location is
+			// the normal way to share skills between checkouts, and reporting
+			// that as a name clash would be reporting a skill against itself.
+			real := canonicalPath(s.FilePath)
+			if realPaths[real] {
+				continue
+			}
 			if existing, dup := byName[s.Name]; dup {
 				collisions = append(collisions, Diagnostic{
 					Type:    "collision",
@@ -219,6 +246,7 @@ func Load(opts LoadOptions) Result {
 				})
 				continue
 			}
+			realPaths[real] = true
 			byName[s.Name] = s
 			order = append(order, s.Name)
 		}
@@ -273,6 +301,16 @@ func sourceFor(path, userDir, projectDir string) string {
 	default:
 		return "path"
 	}
+}
+
+// canonicalPath resolves symlinks so the same file reached two ways compares
+// equal. An unresolvable path is its own answer — a skill that cannot be
+// stat'd is a problem for the caller, not for deduplication.
+func canonicalPath(p string) string {
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		return real
+	}
+	return p
 }
 
 func isUnder(target, root string) bool {

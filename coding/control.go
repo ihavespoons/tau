@@ -293,6 +293,13 @@ func (s *Session) buildCommands() *slashcmd.Registry {
 	}
 	slashcmd.RegisterBuiltins(reg, host)
 
+	// Prompt templates and skills come after the built-ins, so a resource named
+	// "help" is suffixed rather than replacing the real /help.
+	slashcmd.RegisterTemplates(reg, s.Prompts)
+	if s.Settings == nil || s.Settings.EnableSkillCommands() {
+		slashcmd.RegisterSkills(reg, s.Skills)
+	}
+
 	if s.Extensions != nil {
 		for _, c := range s.Extensions.Commands() {
 			reg.Register(extensionCommand{s: s, cmd: c})
@@ -379,6 +386,9 @@ func (h codingHost) Reload(ctx context.Context) (string, error) {
 	} else {
 		fmt.Fprintf(&b, "Reloaded %d extension(s): %s", len(names), strings.Join(names, ", "))
 	}
+	// Skills and prompts are re-scanned too, so say so — otherwise /reload
+	// looks like it did nothing on an installation with no extensions.
+	fmt.Fprintf(&b, "\n%d skill(s), %d prompt template(s).", len(h.s.Skills), len(h.s.Prompts))
 	for _, w := range h.s.Warnings[before:] {
 		b.WriteString("\n  " + w)
 	}

@@ -7,8 +7,8 @@ dependencies.
 
 > **Status: early development.** tau is being built in phases toward parity with
 > Pi v0.82.1. The interactive agent, all ten wire APIs, session trees, Pi
-> import, the extension system and themes are in; prompt templates, skill
-> commands, the package manager and the HTML export are still landing.
+> import, the extension system, themes, keybindings, skills and prompt
+> templates are in; the package manager and the HTML export are still landing.
 >
 > **tau does not ask before it acts.** It edits files and runs shell commands
 > without a confirmation prompt. Run it on a clean git tree or in a scratch
@@ -188,6 +188,57 @@ Your Pi installation is never modified — not the sessions, not the credentials
 The two can coexist while you decide, and an import that damages what it
 imported is not one you would run twice. Files that already exist under `~/.tau`
 are left alone unless you pass `--overwrite`.
+
+## Skills and prompt templates
+
+A **skill** is a folder with a `SKILL.md` in it — instructions the agent reads
+when a task matches:
+
+```markdown
+---
+name: deploy
+description: How to release and roll back the service
+---
+
+Run `make release`. If the smoke test fails, `make rollback` and stop.
+```
+
+tau reads `~/.tau/agent/skills/` and `.tau/skills/` in the project. Only the
+name and description go into the system prompt; the body is read on demand, so
+a long skill costs nothing until it is used. Relative paths inside a skill
+resolve against its own directory, which makes a skill folder with scripts
+beside the markdown work the way you would expect.
+
+Each skill is also a command — `/skill:deploy` — for when you want it applied
+now rather than when the model decides. Set `"enableSkillCommands": false` in
+settings to keep skills prompt-only, or put `disable-model-invocation: true` in
+a skill's frontmatter to invert it: reachable by command, invisible to the
+model.
+
+A **prompt template** is a markdown file in `~/.tau/agent/prompts/` or
+`.tau/prompts/` that becomes a slash command expanding to its own body:
+
+```markdown
+---
+description: Review a file for bugs
+argument-hint: <path>
+---
+
+Review $1 for correctness bugs. Ignore style.
+```
+
+That is `/review api.go`. Arguments substitute as `$1`, `$2`, `$@` or
+`$ARGUMENTS` for the lot, `${1:-default}` when one is missing, and `${@:2}` to
+drop the first.
+
+Scanning honours `.gitignore`, `.ignore`, and `.fdignore`, so a skills folder
+living next to build output does not drag it in, and a skill reached twice
+through a symlink is one skill rather than a name collision. `/reload` picks up
+edits to both without restarting the session.
+
+Project-local skills and prompts are behind the trust gate: a directory you
+have not approved contributes neither. Both put text in front of the model, and
+cloning a repository should not be enough to steer the agent.
 
 ## Themes
 

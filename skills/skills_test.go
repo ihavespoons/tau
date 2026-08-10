@@ -3,6 +3,7 @@ package skills
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -239,5 +240,91 @@ func TestFind(t *testing.T) {
 	}
 	if _, ok := Find(list, "z"); ok {
 		t.Error("should not find z")
+	}
+}
+
+// A skills directory checked into a repository sits beside build output and
+// vendored trees. Scanning it must honor the ignore files already there.
+func TestLoadFromDirHonoursIgnoreFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".gitignore"), "dist/\nscratch\n")
+	writeFile(t, filepath.Join(dir, "keep", "SKILL.md"), "---\ndescription: kept\n---\nbody\n")
+	writeFile(t, filepath.Join(dir, "dist", "SKILL.md"), "---\ndescription: built\n---\nbody\n")
+	writeFile(t, filepath.Join(dir, "scratch", "SKILL.md"), "---\ndescription: scratch\n---\nbody\n")
+
+	res := LoadFromDir(dir, "user")
+	if len(res.Skills) != 1 || res.Skills[0].Name != "keep" {
+		t.Fatalf("expected only the un-ignored skill, got %+v", res.Skills)
+	}
+}
+
+// A nested ignore file governs its own subtree and nothing above it, and a
+// negation re-includes what an earlier pattern dropped.
+func TestLoadFromDirNestedIgnoreAndNegation(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "vendor", ".ignore"), "*\n!wanted\n")
+	writeFile(t, filepath.Join(dir, "vendor", "wanted", "SKILL.md"), "---\ndescription: wanted\n---\nbody\n")
+	writeFile(t, filepath.Join(dir, "vendor", "junk", "SKILL.md"), "---\ndescription: junk\n---\nbody\n")
+	// The same name outside vendor/ must be unaffected by vendor's rules.
+	writeFile(t, filepath.Join(dir, "junk", "SKILL.md"), "---\nname: outer\ndescription: outer\n---\nbody\n")
+
+	var names []string
+	for _, s := range LoadFromDir(dir, "user").Skills {
+		names = append(names, s.Name)
+	}
+	sort.Strings(names)
+	if strings.Join(names, ",") != "outer,wanted" {
+		t.Fatalf("got %v", names)
+	}
+}
+
+// Symlinking a skill directory into a second location is how skills get shared
+// between checkouts. The same file reached twice is one skill, not a clash.
+func TestLoadDeduplicatesSymlinkedSkills(t *testing.T) {
+	root := t.TempDir()
+	agentDir := filepath.Join(root, "agent")
+	writeFile(t, filepath.Join(agentDir, "skills", "deploy", "SKILL.md"), validSkill)
+
+	cwd := filepath.Join(root, "project")
+	link := filepath.Join(cwd, ".tau", "skills", "deploy")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(agentDir, "skills", "deploy"), link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	res := Load(LoadOptions{Cwd: cwd, AgentDir: agentDir, IncludeDefaults: true})
+	if len(res.Skills) != 1 {
+		t.Fatalf("expected one skill, got %+v", res.Skills)
+	}
+	for _, d := range res.Diagnostics {
+		if d.Type == "collision" {
+			t.Errorf("a skill linked to itself is not a collision: %+v", d)
+		}
+	}
+}
+
+// Two genuinely different files sharing a name is still a collision.
+func TestLoadDistinctFilesStillCollide(t *testing.T) {
+	root := t.TempDir()
+	agentDir := filepath.Join(root, "agent")
+	cwd := filepath.Join(root, "project")
+	writeFile(t, filepath.Join(agentDir, "skills", "deploy", "SKILL.md"), validSkill)
+	writeFile(t, filepath.Join(cwd, ".tau", "skills", "deploy", "SKILL.md"),
+		"---\nname: deploy\ndescription: a different deploy\n---\nbody\n")
+
+	res := Load(LoadOptions{Cwd: cwd, AgentDir: agentDir, IncludeDefaults: true})
+	if len(res.Skills) != 1 {
+		t.Fatalf("expected one skill, got %+v", res.Skills)
+	}
+	var collisions int
+	for _, d := range res.Diagnostics {
+		if d.Type == "collision" {
+			collisions++
+		}
+	}
+	if collisions != 1 {
+		t.Errorf("expected one collision diagnostic, got %d: %+v", collisions, res.Diagnostics)
 	}
 }
