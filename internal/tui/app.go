@@ -351,6 +351,9 @@ func (a *app) onKey(msg tea.KeyMsg) tea.Cmd {
 	case a.bound(key, keybindings.AppEditorExternal):
 		return a.openExternalEditor()
 
+	case a.bound(key, keybindings.AppModelSelect):
+		return a.runCommand("/model")
+
 	// These four ship unbound — they are a second route to a slash command, for
 	// people who would rather press a key than type. Running the command rather
 	// than reimplementing it keeps the two routes from drifting apart.

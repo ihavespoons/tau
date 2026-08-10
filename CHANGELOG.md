@@ -4,6 +4,10 @@ All notable changes to tau are recorded here. Versions follow
 [semantic versioning](https://semver.org/); the `0.x` series is pre-1.0, so
 minor bumps may still change behaviour.
 
+## [0.24.1] - 2026-08-10
+
+- `ctrl+l` opens the model picker, which until now needed `/model` typed out.
+
 ## [0.24.0] - 2026-08-10
 
 - The session picker acts on the highlighted row: `ctrl+s` flips the order,
