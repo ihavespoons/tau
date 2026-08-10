@@ -265,14 +265,11 @@ func isEnabledByOverrides(filePath string, patterns []string, baseDir string) bo
 		}
 	}
 
-	enabled := true
-	if len(excludes) > 0 && matchesAny(filePath, excludes, baseDir) {
-		enabled = false
-	}
-	if len(forceIncludes) > 0 && matchesAnyExact(filePath, forceIncludes, baseDir) {
+	enabled := !matchesAny(filePath, excludes, baseDir)
+	if matchesAnyExact(filePath, forceIncludes, baseDir) {
 		enabled = true
 	}
-	if len(forceExcludes) > 0 && matchesAnyExact(filePath, forceExcludes, baseDir) {
+	if matchesAnyExact(filePath, forceExcludes, baseDir) {
 		enabled = false
 	}
 	return enabled

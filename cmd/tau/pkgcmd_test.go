@@ -101,9 +101,9 @@ func captureStdout(t *testing.T, fn func() error) (string, error) {
 
 	runErr := fn()
 	os.Stdout = saved
-	w.Close()
+	_ = w.Close()
 	out := <-done
-	r.Close()
+	_ = r.Close()
 	return out, runErr
 }
 

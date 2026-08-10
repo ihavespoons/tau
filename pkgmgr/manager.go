@@ -469,9 +469,7 @@ func (m *Manager) Resolve(entries []Entry, scope Scope) Resolution {
 			continue
 		}
 		for _, t := range ResourceTypes {
-			for _, r := range m.resolveType(entry, src, root, t, scope, priority) {
-				out.Resources = append(out.Resources, r)
-			}
+			out.Resources = append(out.Resources, m.resolveType(entry, src, root, t, scope, priority)...)
 		}
 	}
 	return out
