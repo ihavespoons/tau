@@ -101,7 +101,7 @@ func (s *Session) ReloadExtensions(ctx context.Context) error {
 	if s.opts.ExternalExtensions != nil {
 		req := LoadRequest{
 			Cwd: s.Cwd, Trusted: s.Trust.Trusted,
-			SettingsPaths: s.Settings.ExtensionPaths(), Mode: s.opts.Mode,
+			SettingsPaths: s.ExtensionPaths(), Mode: s.opts.Mode,
 			Snapshot: s.Snapshot(),
 		}
 		ext, warnings := s.opts.ExternalExtensions.Reload(ctx, req)

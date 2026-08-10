@@ -239,11 +239,11 @@ func TestCompactionCanBeTurnedOff(t *testing.T) {
 		[]byte(`{"compaction":{"enabled":false,"keepRecentTokens":300,"reserveTokens":500}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	set, err := loadSettings(cs.Cwd, cs.Trust.Trusted)
+	mgr, set, err := loadSettings(cs.Cwd, cs.Trust.Trusted)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cs.Settings = set
+	cs.Settings, cs.setMgr = set, mgr
 	longHistory(t, cs)
 
 	compacted, err := cs.MaybeCompact(context.Background())

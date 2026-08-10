@@ -48,3 +48,14 @@ func resolveTrust(cwd string, hasUI bool, override *bool) trust.Outcome {
 	}
 	return outcome
 }
+
+// ResolveTrust answers the same question for callers outside a session — the
+// package subcommands, which install into .tau and must not do so for a
+// checkout the user has not trusted.
+//
+// There is no prompt on this path, so an undecided project is denied and the
+// user reaches it with --approve. A decision saved by a session is honored
+// here, and one saved here is honored by the next session.
+func ResolveTrust(cwd string, override *bool) trust.Outcome {
+	return resolveTrust(cwd, false, override)
+}

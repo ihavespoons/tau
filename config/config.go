@@ -74,6 +74,18 @@ func SkillsDir() string     { return filepath.Join(AgentDir(), "skills") }
 func PromptsDir() string    { return filepath.Join(AgentDir(), "prompts") }
 func ThemesDir() string     { return filepath.Join(AgentDir(), "themes") }
 
+// NPMDir and GitDir hold packages tau installed globally. Each package manager
+// gets its own root so an npm package and a git checkout of the same project
+// cannot collide, and so removing one kind never touches the other.
+func NPMDir() string { return filepath.Join(AgentDir(), "npm") }
+func GitDir() string { return filepath.Join(AgentDir(), "git") }
+
+// ProjectNPMDir and ProjectGitDir are the same roots for packages a project
+// installs. They live under .tau, so the same trust gate that guards project
+// extensions guards them: a clone must not be able to install anything.
+func ProjectNPMDir(cwd string) string { return filepath.Join(ProjectDir(cwd), "npm") }
+func ProjectGitDir(cwd string) string { return filepath.Join(ProjectDir(cwd), "git") }
+
 // KeybindingsPath is the global keybindings file. Bindings are global only:
 // a project cannot rebind keys, because a repository deciding what Ctrl+C does
 // in someone else's terminal is not a customization anyone asked for.

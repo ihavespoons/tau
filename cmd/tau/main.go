@@ -54,6 +54,14 @@ func run(args []string) error {
 			return listSessions()
 		case "import":
 			return importCmd(args[1:])
+		case "install":
+			return installCmd(args[1:])
+		case "remove", "uninstall":
+			return removeCmd(args[1:])
+		case "update":
+			return updateCmd(args[1:])
+		case "packages":
+			return packagesCmd(args[1:])
 		}
 	}
 	return printMode(args)
@@ -102,6 +110,10 @@ usage:
   tau logout [provider]  remove stored credentials
   tau models             list available models
   tau sessions           list sessions for this directory
+  tau install <source>   install a package (npm:, git:, or a local path)
+  tau remove <source>    remove an installed package
+  tau update [source]    update installed packages
+  tau packages           list installed packages
   tau --version
 
 flags:

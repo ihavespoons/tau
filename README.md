@@ -399,6 +399,62 @@ overlays, and provider registration throw a named error and are reported once at
 load, rather than appearing to work and silently doing nothing. Those need a Go
 port.
 
+## Packages
+
+A package is a bundle of skills, prompt templates, themes and extensions that
+someone else wrote. Install one and its resources join yours:
+
+```sh
+tau install npm:some-pack               # from npm
+tau install git:github.com/you/pack     # from a git host
+tau install ./pack                      # a directory already on disk
+tau packages                            # what is installed, and from where
+tau update                              # refresh everything unpinned
+tau remove npm:some-pack
+```
+
+npm sources take a version (`npm:some-pack@1.2.3`), git sources a ref
+(`git:github.com/you/pack#v2`). Either one, spelled exactly, is *pinned* and
+`tau update` leaves it alone: a version you wrote down is a version you meant.
+npm and git packages land under `~/.tau/agent/npm` and `~/.tau/agent/git`. A
+local package is used where it lies, so `tau remove` only stops reading it —
+tau does not delete your directory.
+
+Inside a package, resources are found by convention — `skills/`, `prompts/`,
+`themes/`, `extensions/` — or declared in `package.json`:
+
+```json
+{ "name": "some-pack", "tau": { "skills": ["skills/*"], "themes": ["midnight.json"] } }
+```
+
+The key is `tau`, and `pi` is accepted too, so a package written for Pi works
+unchanged.
+
+Installing records the source in `~/.tau/settings.json`. Expand that entry to
+switch individual resources off without uninstalling:
+
+```json
+{
+  "packages": [
+    "npm:some-pack",
+    { "source": "git:github.com/you/pack", "skills": ["!deploy"], "themes": [] }
+  ]
+}
+```
+
+Patterns filter what loads: a bare glob includes, `!` excludes, and `+`/`-`
+force a single file in or out regardless of the rest. `"autoload": false` flips
+the default, so nothing from the package loads except what a pattern names.
+
+`tau install -l` writes `.tau/settings.json` instead, so the package travels
+with the checkout. That path is behind the trust gate — a package is code, and
+cloning a repository should not be enough to make tau fetch and run it — so an
+unapproved project refuses the install and tells you to pass `-approve`.
+
+When two packages ship a resource under the same name, the first one registered
+wins: paths you wrote by hand in settings beat package paths, and a project
+package beats a user one. `/reload` picks up a package installed mid-session.
+
 ## Driving tau from another program
 
 `--mode rpc` turns tau into a JSONL server on stdin and stdout — the mode for an

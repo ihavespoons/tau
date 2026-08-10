@@ -55,7 +55,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	th, warnings := LoadTheme(cs.Settings.ThemeSetting(), theme.Options{
 		Dir:   config.ThemesDir(),
-		Paths: cs.Settings.ThemePaths(),
+		Paths: cs.ThemePaths(),
 	})
 	cs.Warnings = append(cs.Warnings, warnings...)
 

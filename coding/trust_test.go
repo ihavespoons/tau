@@ -34,11 +34,11 @@ func TestUntrustedProjectSkillsAreNotLoaded(t *testing.T) {
 	writeProjectSkill(t, cwd, "MARKER_UNTRUSTED")
 
 	prompt := func(trusted bool) string {
-		set, err := loadSettings(cwd, trusted)
+		mgr, set, err := loadSettings(cwd, trusted)
 		if err != nil {
 			t.Fatal(err)
 		}
-		res := loadResources(cwd, trusted, set, Options{})
+		res := loadResources(cwd, trusted, mgr, set, Options{})
 		return buildSystemPrompt(cwd, []agent.Tool{}, res.skills, Options{})
 	}
 
@@ -68,11 +68,11 @@ func TestUntrustedProjectPromptsAreNotLoaded(t *testing.T) {
 	}
 
 	load := func(trusted bool) []prompttemplate.Template {
-		set, err := loadSettings(cwd, trusted)
+		mgr, set, err := loadSettings(cwd, trusted)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return loadResources(cwd, trusted, set, Options{}).prompts
+		return loadResources(cwd, trusted, mgr, set, Options{}).prompts
 	}
 
 	if got := load(false); len(got) != 0 {

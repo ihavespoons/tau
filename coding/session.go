@@ -20,6 +20,7 @@ import (
 	"github.com/ihavespoons/tau/config"
 	"github.com/ihavespoons/tau/extension"
 	"github.com/ihavespoons/tau/models"
+	"github.com/ihavespoons/tau/pkgmgr"
 	"github.com/ihavespoons/tau/prompt"
 	"github.com/ihavespoons/tau/prompttemplate"
 	"github.com/ihavespoons/tau/session"
@@ -83,6 +84,13 @@ type Session struct {
 	Models *models.Registry
 	// Settings is the merged global+project configuration.
 	Settings *settings.Resolved
+	// setMgr is the scope-aware view behind Settings, kept because package
+	// entries can only be read per scope.
+	setMgr *settings.Manager
+	// pkgs are the resource files installed packages contribute. Rescanned
+	// with the rest of the resources, so installing a package and reloading
+	// picks it up.
+	pkgs packagePaths
 	// Skills are the discovered Agent Skills. They appear in the system prompt
 	// and, unless disabled, as /skill:<name> commands.
 	Skills []skills.Skill
@@ -126,6 +134,7 @@ func envExecOptions() env.ExecOptions { return env.ExecOptions{Timeout: 2 * time
 type resources struct {
 	skills   []skills.Skill
 	prompts  []prompttemplate.Template
+	packages packagePaths
 	warnings []string
 }
 
@@ -135,17 +144,22 @@ type resources struct {
 // the system prompt and a prompt template becomes a slash command that expands
 // to arbitrary instructions, so an untrusted checkout gets neither — otherwise
 // cloning a repository would be enough to steer the agent.
-func loadResources(cwd string, trusted bool, set *settings.Resolved, opts Options) resources {
+func loadResources(cwd string, trusted bool, mgr *settings.Manager, set *settings.Resolved, opts Options) resources {
 	scanCwd := cwd
 	if !trusted {
 		scanCwd = ""
 	}
 
-	var res resources
+	res := resources{packages: loadPackages(mgr, cwd, trusted)}
+	res.warnings = append(res.warnings, res.packages.warnings...)
+
 	if !opts.NoSkills {
 		loaded := skills.Load(skills.LoadOptions{
 			Cwd: scanCwd, AgentDir: config.AgentDir(), IncludeDefaults: true,
-			Paths: set.SkillPaths(),
+			// Paths declared in settings come first: first registration wins a
+			// name collision, so what the user wrote by hand beats what a
+			// package happened to ship under the same name.
+			Paths: append(set.SkillPaths(), res.packages.get(pkgmgr.TypeSkills)...),
 		})
 		res.skills = loaded.Skills
 		for _, d := range loaded.Diagnostics {
@@ -155,7 +169,7 @@ func loadResources(cwd string, trusted bool, set *settings.Resolved, opts Option
 
 	res.prompts = prompttemplate.Load(prompttemplate.LoadOptions{
 		Cwd: scanCwd, AgentDir: config.AgentDir(), IncludeDefaults: true,
-		Paths: set.PromptPaths(),
+		Paths: append(set.PromptPaths(), res.packages.get(pkgmgr.TypePrompts)...),
 	})
 	return res
 }
@@ -167,8 +181,8 @@ func loadResources(cwd string, trusted bool, set *settings.Resolved, opts Option
 // startup, and a rescan is not the moment to re-ask a question the user has
 // already answered.
 func (s *Session) refreshResources() {
-	res := loadResources(s.Cwd, s.Trust.Trusted, s.Settings, s.opts)
-	s.Skills, s.Prompts = res.skills, res.prompts
+	res := loadResources(s.Cwd, s.Trust.Trusted, s.setMgr, s.Settings, s.opts)
+	s.Skills, s.Prompts, s.pkgs = res.skills, res.prompts, res.packages
 	s.Warnings = append(s.Warnings, res.warnings...)
 
 	s.mu.Lock()
@@ -186,6 +200,17 @@ func (s *Session) refreshResources() {
 			s.Extensions.SetSystemPrompt(sp)
 		}
 	}
+}
+
+// ExtensionPaths are the extension entry points to load: the ones named in
+// settings first, then the ones installed packages contribute.
+func (s *Session) ExtensionPaths() []string {
+	return append(s.Settings.ExtensionPaths(), s.pkgs.get(pkgmgr.TypeExtensions)...)
+}
+
+// ThemePaths are the theme files to load, from settings and from packages.
+func (s *Session) ThemePaths() []string {
+	return append(s.Settings.ThemePaths(), s.pkgs.get(pkgmgr.TypeThemes)...)
 }
 
 // buildSystemPrompt assembles the run's system prompt from the active tools'
@@ -233,7 +258,7 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 	// project's own settings must not be able to influence the decision.
 	tr := resolveTrust(cwd, opts.Mode == extension.ModeTUI, opts.TrustOverride)
 
-	set, err := loadSettings(cwd, tr.Trusted)
+	setMgr, set, err := loadSettings(cwd, tr.Trusted)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +279,7 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 		toolset = tools.CodingTools(e)
 	}
 
-	res := loadResources(cwd, tr.Trusted, set, opts)
+	res := loadResources(cwd, tr.Trusted, setMgr, set, opts)
 	systemPrompt := buildSystemPrompt(cwd, toolset, res.skills, opts)
 
 	ui := opts.UI
@@ -264,8 +289,8 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 
 	cs := &Session{
 		Env: e, Model: model, Trust: tr, Cwd: cwd,
-		Models: reg, Settings: set, UI: ui, store: store, opts: opts,
-		Skills: res.skills, Prompts: res.prompts,
+		Models: reg, Settings: set, setMgr: setMgr, UI: ui, store: store, opts: opts,
+		Skills: res.skills, Prompts: res.prompts, pkgs: res.packages,
 		Warnings: append(modelWarnings, res.warnings...),
 	}
 
@@ -333,7 +358,7 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 			snap.ContextWindow, snap.MaxTokens = model.ContextWindow, model.MaxTokens
 		}
 		ext, warnings := opts.ExternalExtensions.Load(ctx, LoadRequest{
-			Cwd: cwd, Trusted: tr.Trusted, SettingsPaths: set.ExtensionPaths(),
+			Cwd: cwd, Trusted: tr.Trusted, SettingsPaths: cs.ExtensionPaths(),
 			Mode: mode, Snapshot: snap,
 		})
 		loadedExts = append(loadedExts, ext...)
@@ -416,14 +441,22 @@ const DefaultModel = "anthropic/claude-sonnet-5"
 
 // loadSettings reads the merged configuration. The project scope is gated on
 // the trust decision: an untrusted directory's settings.json is not read.
-func loadSettings(cwd string, trusted bool) (*settings.Resolved, error) {
+//
+// The manager is returned alongside the merged view because package entries
+// have to be read per scope — the merge cannot say which file an entry came
+// from, and that is what decides where its package lives on disk.
+func loadSettings(cwd string, trusted bool) (*settings.Manager, *settings.Resolved, error) {
 	mgr, err := settings.Load(settings.Options{
 		Cwd: cwd, AgentDir: config.AgentDir(), ProjectTrusted: trusted,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("loading settings: %w", err)
+		return nil, nil, fmt.Errorf("loading settings: %w", err)
 	}
-	return mgr.Resolve()
+	res, err := mgr.Resolve()
+	if err != nil {
+		return nil, nil, err
+	}
+	return mgr, res, nil
 }
 
 // BuildRegistry composes the compiled provider catalog with ~/.tau/models.json.
