@@ -166,6 +166,8 @@ type Interactive interface {
 	SelectForkPoint(ctx context.Context) (string, error)
 	// SelectScopedModels opens the checklist of models to cycle through.
 	SelectScopedModels(ctx context.Context) (string, error)
+	// SelectSettings opens the settings menu.
+	SelectSettings(ctx context.Context) (string, error)
 }
 
 // RegisterBuiltins adds every built-in command to the registry.
@@ -279,7 +281,7 @@ func RegisterBuiltins(r *Registry, host Host) {
 				r.Register(New(info, nil))
 				break
 			}
-			r.Register(NewWithCompleter(info, settingsRun(store), settingsComplete(store)))
+			r.Register(NewWithCompleter(info, settingsRun(store, ui), settingsComplete(store)))
 		case "scoped-models":
 			// The hint is set here rather than in the ported table: Pi's
 			// command takes no arguments because it opens a picker, and this
@@ -384,10 +386,17 @@ func exportOp(exp Exporter, fn func(context.Context, string) (string, error)) fu
 //
 // The value keeps its spaces — a JSON array or an editor command line is one
 // argument even though it looks like several.
-func settingsRun(store SettingsStore) func(context.Context, string) (Result, error) {
+func settingsRun(store SettingsStore, ui Interactive) func(context.Context, string) (Result, error) {
 	return func(ctx context.Context, args string) (Result, error) {
 		args = strings.TrimSpace(args)
 		if args == "" {
+			// With a UI this is a menu, the way Pi has it. Headless it stays a
+			// report, which is the only thing a bare /settings can mean when
+			// there is nobody to ask.
+			if ui != nil {
+				out, err := ui.SelectSettings(ctx)
+				return Result{Output: out}, err
+			}
 			return Result{Output: store.SettingsList()}, nil
 		}
 

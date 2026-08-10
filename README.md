@@ -425,11 +425,21 @@ transcript points at.
 
 ## Settings
 
-`/settings` reads and writes the merged configuration without leaving the
-session:
+`/settings` on its own opens a menu of the settings worth changing while tau is
+running: Enter flips a toggle, or opens a list or a field for the rest. It shows
+what is in effect, defaults included, and reads the file back after each change
+rather than assuming the write landed. Emptying a field unsets the key, which is
+different from setting it to an empty string.
+
+The menu is curated, not generated. Nested configuration — `compaction`,
+`retry`, `thinkingBudgets` — is left to the file and the typed form below, since
+a menu that could only edit them as pasted JSON would be worse than typing.
+
+Everything is also reachable as arguments, which is the only form that works
+headless:
 
 ```
-/settings                          # what is set, and which file it came from
+/settings                          # (headless) what is set, and its scope
 /settings theme                    # one key
 /settings theme gruvbox-dark       # write it to ~/.tau/settings.json
 /settings compaction.enabled false # one level of nesting

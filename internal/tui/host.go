@@ -195,6 +195,99 @@ func scopedPatterns(opts []extension.SelectOption, picked []int) []string {
 	return out
 }
 
+// SelectSettings opens the settings menu.
+//
+// Like every other picker that acts on a row, it closes, changes the setting,
+// and opens again on a freshly read menu — so the new value is on screen
+// because it was read back, not because tau assumed the write worked.
+func (h *host) SelectSettings(ctx context.Context) (string, error) {
+	at := 0
+	for {
+		rows := h.cs.SettingsMenu()
+		if len(rows) == 0 {
+			return "", errors.New("this session has nowhere to save settings")
+		}
+
+		opts := make([]extension.SelectOption, 0, len(rows))
+		for _, r := range rows {
+			opts = append(opts, extension.SelectOption{
+				Label: r.Label, Description: shownValue(r.Value), Value: r.Key,
+			})
+		}
+
+		idx, err := h.bridge.Select(ctx, extension.SelectRequest{
+			Title:      "Settings",
+			Message:    "Saved to your global settings file.",
+			Options:    opts,
+			Initial:    at,
+			Filterable: true,
+		})
+		if err != nil || idx < 0 {
+			return "", err
+		}
+		at = idx
+		h.changeSetting(ctx, rows[idx])
+	}
+}
+
+// changeSetting applies one row. A cancelled prompt is not an error: backing
+// out of a settings change is a normal thing to do.
+func (h *host) changeSetting(ctx context.Context, row coding.SettingRow) {
+	var out string
+	var err error
+
+	switch row.Kind {
+	case coding.SettingToggle:
+		out, err = h.cs.ToggleSetting(ctx, row)
+
+	case coding.SettingChoice:
+		opts := make([]extension.SelectOption, 0, len(row.Choices))
+		initial := 0
+		for i, c := range row.Choices {
+			if c == row.Value {
+				initial = i
+			}
+			opts = append(opts, extension.SelectOption{Label: shownValue(c), Value: c})
+		}
+		pick, perr := h.bridge.Select(ctx, extension.SelectRequest{
+			Title: row.Label, Message: row.Key, Options: opts, Initial: initial,
+		})
+		if perr != nil || pick < 0 {
+			return
+		}
+		out, err = h.cs.ApplySetting(ctx, row, row.Choices[pick])
+
+	case coding.SettingText:
+		value, ierr := h.bridge.Input(ctx, extension.InputRequest{
+			Title:       row.Label,
+			Message:     row.Key,
+			Initial:     row.Value,
+			Placeholder: "empty to unset",
+		})
+		if ierr != nil {
+			return
+		}
+		out, err = h.cs.ApplySetting(ctx, row, value)
+	}
+
+	if err != nil {
+		h.bridge.Notify(extension.Notification{Level: extension.NotifyError, Message: err.Error()})
+		return
+	}
+	if out != "" {
+		h.bridge.Notify(extension.Notification{Message: out})
+	}
+}
+
+// shownValue names the empty setting, which otherwise reads as a missing row
+// rather than as a choice someone can make.
+func shownValue(v string) string {
+	if v == "" {
+		return "not set"
+	}
+	return v
+}
+
 // scopedModelHints advertises the checklist's keys under the list.
 func (h *host) scopedModelHints() string {
 	var parts []string

@@ -4,6 +4,22 @@ All notable changes to tau are recorded here. Versions follow
 [semantic versioning](https://semver.org/); the `0.x` series is pre-1.0, so
 minor bumps may still change behaviour.
 
+## [0.29.0] - 2026-08-10
+
+- `/settings` opens a menu, the way Pi's does. Enter flips a toggle, or opens a
+  list or a field for the rest. Every change closes the menu, writes, and opens
+  it again on a freshly read file, so the new value is on screen because it was
+  read back rather than assumed.
+- The menu shows what is in effect, defaults included — a row reading `off`
+  because nobody set it looks the same as one set to `off`, which is the point.
+- Emptying a text field unsets the key rather than writing an empty string. The
+  two mean different things to every setting with a default.
+- The menu is curated, not generated from the known keys. Nested configuration
+  is left to the typed form: a row that could only be edited as pasted JSON
+  would be worse than typing the command.
+- `/settings <key> ...` is unchanged and is still the only form that works
+  headless, where a bare `/settings` remains the report.
+
 ## [0.28.0] - 2026-08-10
 
 - Images. `ctrl+v` attaches one from the clipboard to your next message, so a
