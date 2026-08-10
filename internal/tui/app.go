@@ -113,6 +113,9 @@ func (a *app) banner() []string {
 	if !a.cs.Trust.Trusted {
 		lines = append(lines, t.Warning.Render("  project resources not loaded: "+a.cs.Trust.Reason))
 	}
+	for _, w := range a.cs.Warnings {
+		lines = append(lines, t.Warning.Render("  "+w))
+	}
 	if a.cs.Extensions != nil {
 		if errs := a.cs.Extensions.Errors(); len(errs) > 0 {
 			for _, e := range errs {

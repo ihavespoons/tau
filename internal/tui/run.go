@@ -18,7 +18,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ihavespoons/tau/agent"
 	"github.com/ihavespoons/tau/coding"
+	"github.com/ihavespoons/tau/config"
 	"github.com/ihavespoons/tau/extension"
+	"github.com/ihavespoons/tau/theme"
 )
 
 // Options configures the interactive session.
@@ -50,8 +52,13 @@ func Run(ctx context.Context, opts Options) error {
 	h.cs = cs
 	defer cs.Close(ctx, "exit")
 
-	theme := DefaultTheme()
-	a := newApp(cs, bridge, theme)
+	th, warnings := LoadTheme(cs.Settings.ThemeSetting(), theme.Options{
+		Dir:   config.ThemesDir(),
+		Paths: cs.Settings.ThemePaths(),
+	})
+	cs.Warnings = append(cs.Warnings, warnings...)
+
+	a := newApp(cs, bridge, th)
 
 	prog := tea.NewProgram(a)
 	bridge.attach(prog)

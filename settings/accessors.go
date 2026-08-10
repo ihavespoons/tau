@@ -62,6 +62,10 @@ func (r *Resolved) DefaultThinkingLevel() string { return str(r.s.DefaultThinkin
 // Transport is the preferred provider transport.
 func (r *Resolved) Transport() string { return str(r.s.Transport, DefaultTransport) }
 
+// ThemeSetting is the raw theme setting, which is either a theme name or the
+// automatic "<light>/<dark>" form naming one theme per terminal background.
+func (r *Resolved) ThemeSetting() string { return str(r.s.Theme, "") }
+
 // Theme is the configured theme name, ignoring package-qualified values
 // (Pi returns undefined for names containing "/").
 func (r *Resolved) Theme() string {

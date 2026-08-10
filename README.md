@@ -7,8 +7,8 @@ dependencies.
 
 > **Status: early development.** tau is being built in phases toward parity with
 > Pi v0.82.1. The interactive agent, all ten wire APIs, session trees, Pi
-> import and the extension system are in; skills, themes and the HTML export
-> are still landing.
+> import, the extension system and themes are in; prompt templates, skill
+> commands, the package manager and the HTML export are still landing.
 >
 > **tau does not ask before it acts.** It edits files and runs shell commands
 > without a confirmation prompt. Run it on a clean git tree or in a scratch
@@ -188,6 +188,45 @@ Your Pi installation is never modified — not the sessions, not the credentials
 The two can coexist while you decide, and an import that damages what it
 imported is not one you would run twice. Files that already exist under `~/.tau`
 are left alone unless you pass `--overwrite`.
+
+## Themes
+
+Set one in `~/.tau/settings.json`:
+
+```json
+{ "theme": "dark" }
+```
+
+`dark` and `light` are built in. A custom theme is a JSON file in
+`~/.tau/agent/themes/`, named by its `name` field rather than its filename, and
+`themes` in settings adds further files or directories to search.
+
+Give the setting two names separated by a slash and tau picks between them by
+what your terminal is:
+
+```json
+{ "theme": "solarized-light/solarized-dark" }
+```
+
+The background is read from `COLORFGBG` when the terminal sets it, and asked for
+over OSC 11 when it does not.
+
+The file format is Pi's, unchanged — a `colors` table of 52 tokens, each a
+`#rrggbb` string, a 256-colour palette index, the name of an entry in `vars`, or
+`""` for no colour:
+
+```json
+{
+  "name": "solarized-dark",
+  "vars": { "base0": "#839496", "cyan": "#2aa198" },
+  "colors": { "text": "base0", "accent": "cyan", "error": "#dc322f" }
+}
+```
+
+A theme written for Pi loads in tau and vice versa; copying one out of
+`~/.pi/agent/themes` is all the migration there is. A theme that fails to
+load — a missing token, a variable that refers to nothing — is named at startup
+with the reason, and the rest still load.
 
 ## Extensions
 
