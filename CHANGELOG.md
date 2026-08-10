@@ -4,6 +4,23 @@ All notable changes to tau are recorded here. Versions follow
 [semantic versioning](https://semver.org/); the `0.x` series is pre-1.0, so
 minor bumps may still change behaviour.
 
+## [0.34.0] - 2026-08-10
+
+- A cross-provider conformance suite, `ai/conformance`. The per-wire tests each
+  assert their own module; none of them could assert the claim the whole `ai`
+  package rests on — that swapping providers does not change what a caller sees.
+- It compares the wires against each other rather than against a written-down
+  expectation, because "the wires agree" is the claim and so agreement is the
+  test. Four scenarios — text, a tool call, a length stop, a 4xx — across
+  Anthropic's named SSE events, OpenAI's chunk deltas and Google's candidate
+  parts.
+- They agree exactly. Google's fixture sends a tool call whole, with no streamed
+  arguments, and still normalizes to the same `toolcall_start`/`delta`/`end` as
+  the wires that stream them.
+- Three dialects rather than all ten on purpose: what this proves is that
+  normalization holds across genuinely different shapes. The remaining wires
+  keep their own package tests but do not yet take part in the comparison.
+
 ## [0.33.0] - 2026-08-10
 
 - An evals harness, `evals`. A task is a prompt, a seeded working directory and
