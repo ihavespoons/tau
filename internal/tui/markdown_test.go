@@ -248,7 +248,7 @@ func TestCodeHighlightingUsesTheThemesColors(t *testing.T) {
 		t.Fatal("the built-in theme declares no syntaxKeyword colour")
 	}
 
-	out := strings.Join(highlightCode("func main() {}", "go", th), "\n")
+	out := strings.Join(highlightCode("func main() {}", "go", paletteFor(th)), "\n")
 	if !strings.Contains(out, ansiParams(t, keyword)) {
 		t.Errorf("the keyword was not painted with the theme's colour:\n%q", out)
 	}
@@ -256,7 +256,7 @@ func TestCodeHighlightingUsesTheThemesColors(t *testing.T) {
 
 // An unknown language must not lose the code.
 func TestCodeHighlightingSurvivesAnUnknownLanguage(t *testing.T) {
-	out := strings.Join(highlightCode("some text\nmore text", "nosuchlang", DefaultTheme()), "\n")
+	out := strings.Join(highlightCode("some text\nmore text", "nosuchlang", paletteFor(DefaultTheme())), "\n")
 	if stripANSI(out) != "some text\nmore text" {
 		t.Errorf("code was mangled: %q", stripANSI(out))
 	}
@@ -266,7 +266,7 @@ func TestCodeHighlightingSurvivesAnUnknownLanguage(t *testing.T) {
 // copied line by line.
 func TestHighlightedCodeClosesStylesPerLine(t *testing.T) {
 	forceColor(t)
-	for _, line := range highlightCode("func a() {}\nfunc b() {}", "go", DefaultTheme()) {
+	for _, line := range highlightCode("func a() {}\nfunc b() {}", "go", paletteFor(DefaultTheme())) {
 		if strings.Contains(line, "\n") {
 			t.Errorf("a highlighted line contains a newline: %q", line)
 		}

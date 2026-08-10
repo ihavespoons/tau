@@ -18,11 +18,11 @@ import (
 // An unknown language is not an error. Chroma guesses from the content, and a
 // failed guess falls through to unstyled code — a block that renders plainly
 // beats one that does not render.
-func highlightCode(src, lang string, th Theme) []string {
+func highlightCode(src, lang string, styles map[theme.Token]lipgloss.Style) []string {
 	src = strings.TrimRight(src, "\n")
 
 	plain := func() []string {
-		style := tokenStyle(th, theme.MdCodeBlock)
+		style := styles[theme.MdCodeBlock]
 		lines := strings.Split(src, "\n")
 		for i, l := range lines {
 			lines[i] = style.Render(l)
@@ -42,40 +42,66 @@ func highlightCode(src, lang string, th Theme) []string {
 		return plain()
 	}
 
-	styles := syntaxStyles(th)
 	var (
 		out  []string
 		line strings.Builder
 	)
 	for tok := iter(); tok != chroma.EOF; tok = iter() {
 		style := styles[syntaxToken(tok.Type)]
-		// Each piece is styled on its own so no escape sequence spans a line
-		// break: the transcript wraps and is copied line by line.
-		parts := strings.Split(tok.Value, "\n")
-		for i, part := range parts {
-			if i > 0 {
-				out = append(out, line.String())
-				line.Reset()
+		// Walked by index rather than split on newlines: most tokens contain
+		// none, and splitting every one of them allocated a slice per token.
+		for rest := tok.Value; ; {
+			nl := strings.IndexByte(rest, '\n')
+			if nl < 0 {
+				writeStyled(&line, style, rest)
+				break
 			}
-			if part == "" {
-				continue
-			}
-			line.WriteString(style.Render(part))
+			// Each piece is styled on its own so no escape sequence spans a
+			// line break: the transcript wraps and is copied line by line.
+			writeStyled(&line, style, rest[:nl])
+			out = append(out, line.String())
+			line.Reset()
+			rest = rest[nl+1:]
 		}
 	}
 	return append(out, line.String())
 }
 
-// syntaxStyles builds the palette once per block rather than once per token.
-func syntaxStyles(th Theme) map[theme.Token]lipgloss.Style {
-	toks := []theme.Token{
-		theme.SyntaxComment, theme.SyntaxKeyword, theme.SyntaxFunction,
-		theme.SyntaxVariable, theme.SyntaxString, theme.SyntaxNumber,
-		theme.SyntaxType, theme.SyntaxOperator, theme.SyntaxPunctuation,
-		theme.MdCodeBlock,
+// writeStyled appends a run, leaving whitespace unstyled. A foreground colour
+// on a space is invisible, so styling one only adds escape sequences — to the
+// terminal's work, to the transcript's size, and to what lands on the clipboard
+// when the code is copied.
+func writeStyled(b *strings.Builder, style lipgloss.Style, s string) {
+	if s == "" {
+		return
 	}
-	out := make(map[theme.Token]lipgloss.Style, len(toks))
-	for _, t := range toks {
+	if strings.TrimSpace(s) == "" {
+		b.WriteString(s)
+		return
+	}
+	b.WriteString(style.Render(s))
+}
+
+// paletteTokens are every colour the markdown renderer paints with.
+var paletteTokens = []theme.Token{
+	theme.MdHeading, theme.MdLink, theme.MdLinkURL, theme.MdCode,
+	theme.MdCodeBlock, theme.MdCodeBlockBorder, theme.MdQuote,
+	theme.MdQuoteBorder, theme.MdHr, theme.MdListBullet, theme.Border,
+
+	theme.SyntaxComment, theme.SyntaxKeyword, theme.SyntaxFunction,
+	theme.SyntaxVariable, theme.SyntaxString, theme.SyntaxNumber,
+	theme.SyntaxType, theme.SyntaxOperator, theme.SyntaxPunctuation,
+}
+
+// paletteFor resolves the theme's colours into styles once, when the renderer
+// is built. Resolving them per node meant rebuilding a style for every heading,
+// bullet and fence in the transcript.
+//
+// A token the theme does not declare is absent from the map, and a missing key
+// yields the zero style — which renders plainly, exactly as intended.
+func paletteFor(th Theme) map[theme.Token]lipgloss.Style {
+	out := make(map[theme.Token]lipgloss.Style, len(paletteTokens))
+	for _, t := range paletteTokens {
 		out[t] = tokenStyle(th, t)
 	}
 	return out

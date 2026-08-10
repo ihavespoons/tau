@@ -35,13 +35,18 @@ type markdown struct {
 	width int
 	th    Theme
 	md    goldmark.Markdown
+	// palette is resolved once: a transcript has a heading, a bullet or a
+	// fence on a great many lines, and rebuilding a style for each of them was
+	// a tenth of the allocations in a session replay.
+	palette map[theme.Token]lipgloss.Style
 }
 
 func newMarkdown(width int) *markdown { return newThemedMarkdown(width, DefaultTheme()) }
 
 func newThemedMarkdown(width int, th Theme) *markdown {
 	m := &markdown{
-		th: th,
+		th:      th,
+		palette: paletteFor(th),
 		// GFM for tables, strikethrough and task lists; emoji for the
 		// shortcodes models reach for unprompted.
 		md: goldmark.New(goldmark.WithExtensions(gmext.GFM, emoji.Emoji)),
@@ -69,11 +74,11 @@ func (m *markdown) render(src string) []string {
 	src = strings.TrimRight(src, "\n")
 
 	m.mu.Lock()
-	width, th, md := m.width, m.th, m.md
+	width, th, md, palette := m.width, m.th, m.md, m.palette
 	m.mu.Unlock()
 
 	buf := []byte(src)
-	r := &mdRender{th: th, src: buf}
+	r := &mdRender{th: th, src: buf, palette: palette}
 	doc := md.Parser().Parse(text.NewReader(buf))
 	lines := r.blocks(doc, width)
 
@@ -91,23 +96,15 @@ func (m *markdown) render(src string) []string {
 // mdRender holds what every node needs: the palette and the source the AST
 // points into.
 type mdRender struct {
-	th  Theme
-	src []byte
+	th      Theme
+	src     []byte
+	palette map[theme.Token]lipgloss.Style
 }
 
 // style is the palette lookup. An absent token yields a plain style, so a theme
 // missing a colour renders in the terminal's own foreground rather than in
 // something invented here.
-func (r *mdRender) style(tok theme.Token) lipgloss.Style {
-	s := lipgloss.NewStyle()
-	if r.th.Colors == nil {
-		return s
-	}
-	if c := r.th.Colors.Color(tok); c != "" {
-		s = s.Foreground(lipgloss.Color(c))
-	}
-	return s
-}
+func (r *mdRender) style(tok theme.Token) lipgloss.Style { return r.palette[tok] }
 
 // blocks renders a node's block children, separated the way Pi separates them:
 // one blank line between blocks, except between a paragraph and the list it
@@ -184,7 +181,7 @@ func (r *mdRender) heading(n *ast.Heading, width int) []string {
 func (r *mdRender) code(n ast.Node, lang string) []string {
 	border := r.style(theme.MdCodeBlockBorder)
 	out := []string{border.Render("```" + lang)}
-	for _, l := range highlightCode(r.rawText(n), lang, r.th) {
+	for _, l := range highlightCode(r.rawText(n), lang, r.palette) {
 		out = append(out, codeIndent+l)
 	}
 	return append(out, border.Render("```"))

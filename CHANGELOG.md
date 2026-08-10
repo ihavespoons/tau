@@ -4,6 +4,16 @@ All notable changes to tau are recorded here. Versions follow
 [semantic versioning](https://semver.org/); the `0.x` series is pre-1.0, so
 minor bumps may still change behaviour.
 
+## [0.21.1] - 2026-08-10
+
+- Rendering a transcript allocates about a tenth less: theme colours resolve
+  once per renderer instead of once per heading, bullet and fence, and
+  highlighting no longer splits every syntax token on newlines it does not
+  contain.
+- Whitespace inside code blocks is no longer painted. A foreground colour on a
+  space is invisible, so the escape sequences around it only added bytes — to
+  the terminal's work and to what lands on the clipboard when code is copied.
+
 ## [0.21.0] - 2026-08-10
 
 - Markdown is rendered by tau rather than by glamour. Your theme's ten `md*`
