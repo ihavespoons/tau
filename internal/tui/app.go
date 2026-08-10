@@ -13,6 +13,7 @@ import (
 	"github.com/ihavespoons/tau/extension"
 	"github.com/ihavespoons/tau/keybindings"
 	"github.com/ihavespoons/tau/slashcmd"
+	"github.com/ihavespoons/tau/tools"
 )
 
 // Messages produced inside the TUI.
@@ -76,9 +77,12 @@ type app struct {
 	widgetOrder []string
 	notice      string
 
-	// completions holds slash-command suggestions for the current input.
-	completions []slashcmd.Info
-	completeIdx int
+	// completions holds the suggestions offered for whatever is under the
+	// caret, and completeFrom/completeTo bound the runes one would replace.
+	completions  []completion
+	completeIdx  int
+	completeFrom int
+	completeTo   int
 
 	// ctrlCArmed is set by a first Ctrl+C on an empty prompt; a second one
 	// quits. Requiring two makes an accidental interrupt survivable.
@@ -744,11 +748,10 @@ func (a *app) completionView() []string {
 	}
 	var out []string
 	for i, c := range a.completions {
-		row := "/" + c.Name
-		if c.ArgumentHint != "" {
-			row += " " + c.ArgumentHint
+		row := c.label
+		if c.desc != "" {
+			row += a.theme.Dim.Render("  " + c.desc)
 		}
-		row += a.theme.Dim.Render("  " + c.Description)
 		if i == a.completeIdx {
 			out = append(out, a.theme.Selected.Render("▸ ")+truncateCells(row, a.width-2))
 		} else {
@@ -806,33 +809,120 @@ func humanCount(n int) string {
 
 // --- completions ---
 
-// refreshCompletions offers slash commands as soon as the line starts with a
-// slash and has no argument yet.
+// completion is one suggestion and how to draw it.
+type completion struct {
+	// value replaces the span between completeFrom and completeTo.
+	value string
+	label string
+	desc  string
+}
+
+// completionMax is how many suggestions are offered at once. They sit above the
+// prompt, so the list is a glance rather than a page.
+const completionMax = 8
+
+// refreshCompletions decides what, if anything, is being completed.
+//
+// Three things can be: a file path after "@", a command name, and a command's
+// argument. The "@" case is checked first and anywhere in the line, because it
+// is only ever typed to name a path — including inside a command's argument,
+// where the other two cases would otherwise claim it.
 func (a *app) refreshCompletions() {
 	a.completions = nil
 	a.completeIdx = 0
 
-	text := a.ed.Value()
-	if !strings.HasPrefix(text, "/") || strings.ContainsAny(text, " \n") {
+	text := []rune(a.ed.Value())
+	at := min(a.ed.Cursor(), len(text))
+
+	if from, prefix, ok := atPrefix(text, at); ok {
+		a.completeFrom, a.completeTo = from, at
+		for _, p := range tools.FileMatches(context.Background(), a.cs.Cwd, prefix, completionMax) {
+			a.completions = append(a.completions, completion{value: "@" + p, label: p})
+		}
 		return
 	}
-	prefix := strings.ToLower(text[1:])
-	for _, info := range a.cs.Commands.List() {
-		if strings.HasPrefix(strings.ToLower(info.Name), prefix) {
-			a.completions = append(a.completions, info)
+
+	line := string(text)
+	if !strings.HasPrefix(line, "/") || strings.Contains(line, "\n") {
+		return
+	}
+
+	name, arg, hasArg := strings.Cut(line[1:], " ")
+	if !hasArg {
+		a.completeFrom, a.completeTo = 0, len(text)
+		prefix := strings.ToLower(name)
+		for _, info := range a.cs.Commands.List() {
+			if !strings.HasPrefix(strings.ToLower(info.Name), prefix) {
+				continue
+			}
+			label := "/" + info.Name
+			if info.ArgumentHint != "" {
+				label += " " + info.ArgumentHint
+			}
+			// A trailing space, because every command that offers name
+			// completion is about to take an argument or be submitted.
+			a.completions = append(a.completions, completion{
+				value: "/" + info.Name + " ", label: label, desc: info.Description,
+			})
+			if len(a.completions) == completionMax {
+				break
+			}
 		}
-		if len(a.completions) == 8 {
+		return
+	}
+
+	// The whole tail is the prefix: an argument can contain spaces, and a
+	// command that completes paths or model ids needs all of what was typed.
+	a.completeFrom, a.completeTo = len([]rune(name))+2, len(text)
+	for _, item := range a.cs.Commands.Complete(name, arg) {
+		label := item.Label
+		if label == "" {
+			label = item.Value
+		}
+		a.completions = append(a.completions, completion{value: item.Value, label: label})
+		if len(a.completions) == completionMax {
 			break
 		}
 	}
 }
 
+// atPrefix finds the "@" file reference the caret is inside, if any.
+//
+// The "@" has to start a word — an email address in a sentence is not a file
+// reference — and the run up to the caret has to be free of whitespace, because
+// a path with a space in it would need quoting that tau does not parse yet.
+func atPrefix(text []rune, at int) (from int, prefix string, ok bool) {
+	for i := at - 1; i >= 0; i-- {
+		switch {
+		case text[i] == '@':
+			if i > 0 && !isSpaceRune(text[i-1]) {
+				return 0, "", false
+			}
+			return i, string(text[i+1 : at]), true
+		case isSpaceRune(text[i]):
+			return 0, "", false
+		}
+	}
+	return 0, "", false
+}
+
+func isSpaceRune(r rune) bool { return r == ' ' || r == '\t' || r == '\n' }
+
+// acceptCompletion puts the highlighted suggestion in, leaving the caret after
+// it so the next segment of a path can be typed straight away.
 func (a *app) acceptCompletion() {
 	if a.completeIdx >= len(a.completions) {
 		return
 	}
-	a.ed.SetValue("/" + a.completions[a.completeIdx].Name + " ")
+	value := a.completions[a.completeIdx].value
+	a.ed.ReplaceRange(a.completeFrom, a.completeTo, value)
 	a.completions = nil
+
+	// A directory is half an answer: accepting "@internal/" should offer what
+	// is inside it rather than sit there looking finished.
+	if strings.HasSuffix(value, "/") {
+		a.refreshCompletions()
+	}
 }
 
 func isCancel(err error) bool {

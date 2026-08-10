@@ -54,6 +54,12 @@ agent, `Ctrl+P` cycles models, `Ctrl+T` cycles thinking level, and `/help` lists
 the commands. Typing while the agent is working *steers* it — the message is
 delivered at the next turn boundary instead of starting a competing run.
 
+`Tab` completes three things: a `/command` name, that command's argument — so
+`/model ant` offers the models it matches — and a file path after `@`, anywhere
+in a line. Path completion goes through fd when it is there, so it skips what
+`.gitignore` skips, and falls back to reading the one directory you named when
+it is not. Accepting a directory offers what is inside it.
+
 The transcript is printed into your terminal's scrollback rather than an
 alternate screen, so scrolling, selection, and search keep working, and session
 length costs nothing to render.

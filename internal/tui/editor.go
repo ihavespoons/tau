@@ -225,6 +225,33 @@ func (e *editor) Replace(s string) {
 	e.SetValue(s)
 }
 
+// Cursor is where the caret sits, counted in runes.
+func (e *editor) Cursor() int { return e.cursor }
+
+// ReplaceRange swaps the runes in [from,to) and leaves the caret just after
+// what went in, as one undoable edit.
+//
+// Accepting a completion needs this rather than SetValue: the token being
+// completed is a span in the middle of a line, and putting the caret at the end
+// of the buffer would move it away from what was just typed.
+func (e *editor) ReplaceRange(from, to int, s string) {
+	from = min(max(from, 0), len(e.text))
+	to = min(max(to, from), len(e.text))
+
+	e.snapshot()
+	e.run = runNone
+	e.yank = yankState{at: -1}
+
+	ins := []rune(s)
+	out := make([]rune, 0, len(e.text)-(to-from)+len(ins))
+	out = append(out, e.text[:from]...)
+	out = append(out, ins...)
+	out = append(out, e.text[to:]...)
+
+	e.text = out
+	e.cursor = from + len(ins)
+}
+
 // SetWidth sets the wrap width for rendering.
 func (e *editor) SetWidth(w int) {
 	if w < 10 {

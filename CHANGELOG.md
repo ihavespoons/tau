@@ -4,6 +4,21 @@ All notable changes to tau are recorded here. Versions follow
 [semantic versioning](https://semver.org/); the `0.x` series is pre-1.0, so
 minor bumps may still change behaviour.
 
+## [0.27.0] - 2026-08-10
+
+- `@` completes a file path, anywhere in a line. It goes through fd when fd is
+  on disk, so it skips what `.gitignore` skips; without it, it reads the one
+  directory you named, which is instant and never downloads anything on a
+  keystroke. Accepting a directory offers what is inside it.
+- `Tab` now completes a command's *argument*, not just its name. The registry
+  has had a `Complete` method since P3 and nothing in the interface ever called
+  it, so `/model`'s own completer and every extension's `ArgumentCompletions`
+  were unreachable — both work now.
+- A completion replaces the token under the caret rather than the whole line,
+  and leaves the caret where the token ended, so `@` in the middle of a sentence
+  works and the next keystroke lands where you were.
+- Accepting a completion is one undo step.
+
 ## [0.26.0] - 2026-08-10
 
 - `/tree` opens a picker over the whole session tree instead of a list of your
