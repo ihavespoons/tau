@@ -62,6 +62,8 @@ func run(args []string) error {
 			return updateCmd(args[1:])
 		case "packages":
 			return packagesCmd(args[1:])
+		case "export":
+			return exportCmd(args[1:])
 		}
 	}
 	return printMode(args)

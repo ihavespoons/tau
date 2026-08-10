@@ -160,12 +160,77 @@ func TestUnimplementedBuiltinsReportClearly(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r, nil)
 
-	c, _ := r.Lookup("export")
+	c, _ := r.Lookup("settings")
 	if _, err := c.Run(context.Background(), ""); !errors.Is(err, ErrNotImplemented) {
 		t.Errorf("expected ErrNotImplemented, got %v", err)
 	}
 	if c.Info().Description == "" || c.Info().Source != SourceBuiltin {
 		t.Errorf("metadata should still be accurate: %+v", c.Info())
+	}
+}
+
+type stubExporter struct {
+	stubHost
+	exported string
+	shares   int
+}
+
+func (h *stubExporter) ExportSession(_ context.Context, path string) (string, error) {
+	h.exported = path
+	if path == "" {
+		path = "tau-session.html"
+	}
+	return path, nil
+}
+
+func (h *stubExporter) ShareSession(context.Context) (string, error) {
+	h.shares++
+	return "Gist: https://gist.github.com/o/abc123", nil
+}
+
+func TestExportAndShareNeedAnExporterHost(t *testing.T) {
+	// A host that cannot export still advertises the commands, so the help
+	// listing does not change shape with the backing store.
+	r := NewRegistry()
+	RegisterBuiltins(r, &stubHost{})
+	for _, name := range []string{"export", "share"} {
+		c, ok := r.Lookup(name)
+		if !ok {
+			t.Fatalf("/%s was not registered", name)
+		}
+		if _, err := c.Run(context.Background(), ""); !errors.Is(err, ErrNotImplemented) {
+			t.Errorf("/%s on a non-exporter host: err = %v, want ErrNotImplemented", name, err)
+		}
+	}
+
+	host := &stubExporter{}
+	r = NewRegistry()
+	RegisterBuiltins(r, host)
+
+	c, _ := r.Lookup("export")
+	res, err := c.Run(context.Background(), "  out/page.html  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The argument is trimmed before it reaches the host: a path typed after a
+	// command comes with the separating space attached.
+	if host.exported != "out/page.html" {
+		t.Errorf("host got path %q, want out/page.html", host.exported)
+	}
+	if !strings.Contains(res.Output, "out/page.html") {
+		t.Errorf("output should name the file written:\n%s", res.Output)
+	}
+
+	c, _ = r.Lookup("share")
+	res, err = c.Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host.shares != 1 {
+		t.Errorf("share called %d times, want 1", host.shares)
+	}
+	if !strings.Contains(res.Output, "gist.github.com") {
+		t.Errorf("output should carry the links:\n%s", res.Output)
 	}
 }
 

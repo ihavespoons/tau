@@ -80,6 +80,18 @@ type Host interface {
 	Reload(ctx context.Context) (string, error)
 }
 
+// Exporter is the optional surface for taking a session out of tau. It is
+// separate from Host because a host backed by something other than a file on
+// disk has nothing to export, and should leave the commands advertised but
+// unimplemented rather than fail at the end of the work.
+type Exporter interface {
+	// ExportSession writes the session to path and returns the path written.
+	// An empty path picks a default name; the extension chooses the format.
+	ExportSession(ctx context.Context, path string) (string, error)
+	// ShareSession uploads the exported session and returns the links to it.
+	ShareSession(ctx context.Context) (string, error)
+}
+
 // Interactive is the extra surface a host with a UI provides. Built-in
 // commands that must ask the user something are wired only when the host
 // implements it; a headless host leaves them advertised but unimplemented.
@@ -117,6 +129,7 @@ type Interactive interface {
 // help honest and gives extensions a stable surface to override.
 func RegisterBuiltins(r *Registry, host Host) {
 	ui, _ := host.(Interactive)
+	exp, _ := host.(Exporter)
 
 	for _, b := range Builtins {
 		info := Info{
@@ -187,6 +200,18 @@ func RegisterBuiltins(r *Registry, host Host) {
 			r.Register(New(info, sessionOp2(host, func(ctx context.Context, _ string) (string, error) {
 				return host.ForkSession(ctx, "")
 			})))
+		case "export":
+			r.Register(New(info, exportOp(exp, func(ctx context.Context, args string) (string, error) {
+				path, err := exp.ExportSession(ctx, strings.TrimSpace(args))
+				if err != nil {
+					return "", err
+				}
+				return "Exported to: " + path, nil
+			})))
+		case "share":
+			r.Register(New(info, exportOp(exp, func(ctx context.Context, _ string) (string, error) {
+				return exp.ShareSession(ctx)
+			})))
 		default:
 			r.Register(New(info, nil)) // advertised; ErrNotImplemented when run
 		}
@@ -250,6 +275,16 @@ func sessionOp2(host Host, fn func(context.Context, string) (string, error)) fun
 // plainHostOp adapts a Host method that returns text to a command.
 func plainHostOp(host Host, fn func(context.Context, string) (string, error)) func(context.Context, string) (Result, error) {
 	if host == nil {
+		return nil
+	}
+	return func(ctx context.Context, args string) (Result, error) {
+		out, err := fn(ctx, args)
+		return Result{Output: out}, err
+	}
+}
+
+func exportOp(exp Exporter, fn func(context.Context, string) (string, error)) func(context.Context, string) (Result, error) {
+	if exp == nil {
 		return nil
 	}
 	return func(ctx context.Context, args string) (Result, error) {

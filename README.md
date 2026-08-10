@@ -7,8 +7,10 @@ dependencies.
 
 > **Status: early development.** tau is being built in phases toward parity with
 > Pi v0.82.1. The interactive agent, all ten wire APIs, session trees, Pi
-> import, the extension system, themes, keybindings, skills and prompt
-> templates are in; the package manager and the HTML export are still landing.
+> import, the extension system, themes, keybindings, skills, prompt templates,
+> the package manager and HTML export/share are in; a handful of slash commands
+> (`/settings`, `/scoped-models`, `/import`, `/changelog`) and the TUI polish
+> pass are still landing.
 >
 > **tau does not ask before it acts.** It edits files and runs shell commands
 > without a confirmation prompt. Run it on a clean git tree or in a scratch
@@ -454,6 +456,46 @@ unapproved project refuses the install and tells you to pass `-approve`.
 When two packages ship a resource under the same name, the first one registered
 wins: paths you wrote by hand in settings beat package paths, and a project
 package beats a user one. `/reload` picks up a package installed mid-session.
+
+## Exporting and sharing
+
+`/export` writes the conversation to a single HTML file that opens in a browser
+with no server and no network — the transcript, the tool calls, the diffs and
+the system prompt are all inside it:
+
+```
+/export                      # tau-session-<name>.html, in the working directory
+/export ~/notes/bug.html     # somewhere else
+/export ~/notes/bug.jsonl    # a session file instead of a page
+```
+
+The suffix picks the format. A `.jsonl` path writes a session file tau can open
+again with `tau --session <file>`, flattened to the current branch; anything
+else renders the page. Both keep the whole history, including what a compaction
+summarized away — an export is the transcript, not the model's context.
+
+The same renderer runs on a session file you already have:
+
+```sh
+tau export <file>.jsonl                              # tau-session-<name>.html, here
+tau export <file>.jsonl out.html -theme gruvbox-dark
+```
+
+`/share` exports the page and uploads it as a secret GitHub gist through the
+`gh` CLI, which must be installed and logged in. **A secret gist is unlisted,
+not private:** anyone holding the link can read the whole transcript, including
+file contents and command output that ended up in it. Read what you are sending
+before you send it.
+
+tau prints the gist URL and stops there — there is no tau-operated viewer, and
+tau will not hand your transcript to a third-party site by default. `gh gist
+view --web` opens it, and downloading the file opens the page as exported. If
+you run a viewer that takes a gist id in its fragment, point `TAU_SHARE_VIEWER_URL`
+at it and tau will print `<url>#<gistId>` alongside the gist link.
+
+Tool output that tau renders in the terminal but the viewer does not know about
+yet — `grep`, `find`, and extension tools — falls back to a generic view in the
+page. `bash`, `read`, `write`, `edit` and `ls` render fully.
 
 ## Driving tau from another program
 

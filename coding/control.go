@@ -577,3 +577,13 @@ func (h codingHost) SetLabel(ctx context.Context, label string) (string, error) 
 	}
 	return "Labelled " + *leaf + " as " + label, nil
 }
+
+// ExportSession writes the conversation to a file. See Session.ExportSession.
+func (h codingHost) ExportSession(ctx context.Context, path string) (string, error) {
+	return h.s.ExportSession(ctx, path)
+}
+
+// ShareSession uploads the exported session as a secret gist.
+func (h codingHost) ShareSession(ctx context.Context) (string, error) {
+	return h.s.ShareSession(ctx)
+}
