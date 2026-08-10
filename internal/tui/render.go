@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"encoding/base64"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -24,13 +26,46 @@ type renderer struct {
 	hideThinking bool
 	// toolOutputLines caps how much of a tool result is shown inline.
 	toolOutputLines int
+	// images is what the terminal can draw, resolved once: the environment
+	// does not change under a running process, and asking per image would put
+	// a map lookup in the middle of rendering.
+	images imageProtocol
 }
 
 func newRenderer(theme Theme, width int, hideThinking bool) *renderer {
 	return &renderer{
 		theme: theme, md: newThemedMarkdown(width, theme), width: width,
 		hideThinking: hideThinking, toolOutputLines: 12,
+		images: detectImageProtocol(os.Getenv),
 	}
+}
+
+// imageLines draws every image in a content list, or describes it.
+//
+// The escape sequence goes out as one line even though the terminal will use
+// several. tau prints history into scrollback and never redraws it, so the
+// terminal's own scrolling is what makes room — there is no render tree here
+// whose height accounting could disagree.
+func (r *renderer) imageLines(list ai.ContentList, indent string) []string {
+	var out []string
+	for _, c := range list {
+		img, ok := c.(ai.ImageContent)
+		if !ok {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(img.Data)
+		if err != nil {
+			out = append(out, indent+r.theme.Dim.Render("[unreadable image]"))
+			continue
+		}
+		drawn := renderImage(r.images, data, img.MimeType, max(4, r.width-len(indent)))
+		if strings.HasPrefix(drawn, "\x1b") {
+			out = append(out, indent+drawn)
+		} else {
+			out = append(out, indent+r.theme.Dim.Render(drawn))
+		}
+	}
+	return out
 }
 
 func (r *renderer) setWidth(w int) {
@@ -86,6 +121,8 @@ func (r *renderer) assistant(m ai.AssistantMessage) []string {
 				continue
 			}
 			out = append(out, r.md.render(b.Text)...)
+		case ai.ImageContent:
+			out = append(out, r.imageLines(ai.ContentList{b}, "")...)
 		}
 	}
 
@@ -119,12 +156,19 @@ func (r *renderer) toolCall(name string, args map[string]any) string {
 // toolResult renders a finished tool's output, indented under its call and
 // clipped to a readable height. The session file keeps the full text.
 func (r *renderer) toolResult(res *agent.ToolResult, isError bool) []string {
+	// An MCP server answering with a screenshot and nothing else is a result,
+	// so the images are collected before the text is judged empty.
+	var images []string
+	if res != nil {
+		images = r.imageLines(res.Content, "  ")
+	}
+
 	text := resultText(res)
 	if strings.TrimSpace(text) == "" {
 		if isError {
-			return []string{r.theme.Error.Render("  ↳ failed")}
+			return append([]string{r.theme.Error.Render("  ↳ failed")}, images...)
 		}
-		return nil
+		return images
 	}
 
 	lines := wrapBlock(strings.TrimRight(text, "\n"), r.width-4)

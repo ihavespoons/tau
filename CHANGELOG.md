@@ -4,6 +4,25 @@ All notable changes to tau are recorded here. Versions follow
 [semantic versioning](https://semver.org/); the `0.x` series is pre-1.0, so
 minor bumps may still change behaviour.
 
+## [0.28.0] - 2026-08-10
+
+- Images. `ctrl+v` attaches one from the clipboard to your next message, so a
+  screenshot of the thing you are asking about can go with the question rather
+  than be described. `app.clipboard.pasteImage` has been bound since P9 and did
+  nothing until now.
+- Images in the transcript are drawn inline in kitty, Ghostty, WezTerm and
+  iTerm2. Everywhere else — and under tmux, and in CI — they are described as
+  `[png 1024×768, 240 kB]`, because knowing an image was there matters more than
+  seeing it. `TAU_NO_IMAGES=1` forces the description form.
+- A tool result that is only an image is no longer silently blank. An MCP server
+  answering with a screenshot has something to show.
+- An image is sized in terminal cells against the transcript width and capped at
+  twenty rows: a screenshot in a conversation is a reference, not the
+  conversation.
+- The escape sequences are unit-tested against both protocols' documented
+  shapes, but no one has yet watched an image appear in a real terminal. That
+  first look is still outstanding.
+
 ## [0.27.0] - 2026-08-10
 
 - `@` completes a file path, anywhere in a line. It goes through fd when fd is

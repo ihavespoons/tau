@@ -60,6 +60,12 @@ in a line. Path completion goes through fd when it is there, so it skips what
 `.gitignore` skips, and falls back to reading the one directory you named when
 it is not. Accepting a directory offers what is inside it.
 
+`Ctrl+V` attaches an image from the clipboard to your next message — screenshot
+the thing you are asking about, paste, type the question, send. Images in the
+transcript are drawn inline in kitty, Ghostty, WezTerm and iTerm2, and described
+as `[png 1024×768, 240 kB]` everywhere else, including under tmux. Set
+`TAU_NO_IMAGES=1` to force the description form.
+
 The transcript is printed into your terminal's scrollback rather than an
 alternate screen, so scrolling, selection, and search keep working, and session
 length costs nothing to render.
@@ -385,7 +391,7 @@ is unreachable.
 Three caveats. `shift+enter` needs a terminal that distinguishes it from
 `enter`, which most do not report to tau yet; `ctrl+j` is the one that always
 works. `ctrl+backspace` and `ctrl+h` are the same key: a terminal sends one
-byte for both, so binding them to different actions binds one key twice. Image paste is still landing, so binding `pasteImage` does nothing today.
+byte for both, so binding them to different actions binds one key twice.
 And `pageUp`, `pageDown` and `copy` are deliberately left alone: tau prints into
 the terminal's own scrollback rather than taking over the screen, so scrolling
 and selection belong to the terminal, and claiming those keys would take them

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -25,7 +26,12 @@ type (
 		res slashcmd.Result
 		err error
 	}
-	printMsg struct{ lines []string }
+	printMsg          struct{ lines []string }
+	clipboardImageMsg struct {
+		data []byte
+		mime string
+		err  error
+	}
 )
 
 // liveTool is a tool call currently executing.
@@ -83,6 +89,11 @@ type app struct {
 	completeIdx  int
 	completeFrom int
 	completeTo   int
+
+	// pendingImages are attachments waiting for a prompt to carry them. They
+	// are held rather than sent at once because an image on its own says
+	// nothing: what is wanted is the screenshot *and* the question about it.
+	pendingImages []ai.ImageContent
 
 	// ctrlCArmed is set by a first Ctrl+C on an empty prompt; a second one
 	// quits. Requiring two makes an accidental interrupt survivable.
@@ -186,6 +197,10 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case printMsg:
 		a.emit(msg.lines)
+		return a, nil
+
+	case clipboardImageMsg:
+		a.attachImage(msg)
 		return a, nil
 
 	case externalEditorDone:
@@ -376,6 +391,9 @@ func (a *app) onKey(msg tea.KeyMsg) tea.Cmd {
 	case a.bound(key, keybindings.InputTab) && len(a.completions) > 0:
 		a.acceptCompletion()
 		return nil
+
+	case a.bound(key, keybindings.AppClipboardPasteImage):
+		return a.pasteImage()
 	}
 
 	submitted, ok := a.ed.Update(msg)
@@ -460,14 +478,18 @@ func (a *app) submit(text string) tea.Cmd {
 		return a.runUserBash(command, exclude)
 	}
 
+	// Built before the echo, because it is what clears the pending
+	// attachments — echoing them afterwards would draw them twice.
+	content := a.userContent(text)
 	a.emit(append(a.rend.user(text), ""))
+	a.emit(a.rend.imageLines(content.Blocks, "  "))
 
 	// Typing while the agent works is steering, not a new turn: the message
 	// joins the conversation at the next turn boundary and in-flight tools
 	// still finish.
 	if a.running {
 		a.cs.Agent.Steer(ai.UserMessage{
-			Content:   ai.UserContent{Text: text},
+			Content:   content,
 			Timestamp: time.Now().UnixMilli(),
 		})
 		a.notice = "steering — will be delivered at the next turn"
@@ -478,7 +500,7 @@ func (a *app) submit(text string) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	return tea.Batch(tickCmd(), func() tea.Msg {
 		defer cancel()
-		_, err := a.cs.Prompt(ctx, text)
+		_, err := a.cs.PromptContent(ctx, content)
 		return agentDoneMsg{err: err}
 	})
 }
@@ -805,6 +827,53 @@ func humanCount(n int) string {
 	default:
 		return fmt.Sprint(n)
 	}
+}
+
+// --- images ---
+
+// pasteImage reads the clipboard off the render goroutine, because every
+// implementation of it is a subprocess.
+func (a *app) pasteImage() tea.Cmd {
+	return func() tea.Msg {
+		data, mime, err := readClipboardImage(context.Background())
+		return clipboardImageMsg{data: data, mime: mime, err: err}
+	}
+}
+
+// attachImage holds a pasted image for the next prompt.
+//
+// A clipboard with text on it is not an error worth a red line: it is what the
+// key does when pressed by mistake, and saying so quietly is enough.
+func (a *app) attachImage(msg clipboardImageMsg) {
+	if msg.err != nil || len(msg.data) == 0 {
+		a.notice = "no image on the clipboard"
+		return
+	}
+	a.pendingImages = append(a.pendingImages, ai.ImageContent{
+		Data:     base64.StdEncoding.EncodeToString(msg.data),
+		MimeType: msg.mime,
+	})
+	a.notice = fmt.Sprintf("%d image(s) attached — they go with your next message", len(a.pendingImages))
+}
+
+// userContent builds the message body, folding in anything pasted.
+//
+// Text comes first because a model reads the instruction before the picture,
+// and an attachment with no prompt still goes out: someone who pasted an image
+// and pressed enter meant to send it.
+func (a *app) userContent(text string) ai.UserContent {
+	if len(a.pendingImages) == 0 {
+		return ai.UserContent{Text: text}
+	}
+	blocks := make(ai.ContentList, 0, len(a.pendingImages)+1)
+	if strings.TrimSpace(text) != "" {
+		blocks = append(blocks, ai.TextContent{Text: text})
+	}
+	for _, img := range a.pendingImages {
+		blocks = append(blocks, img)
+	}
+	a.pendingImages = nil
+	return ai.UserContent{Blocks: blocks}
 }
 
 // --- completions ---

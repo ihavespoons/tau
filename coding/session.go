@@ -639,6 +639,12 @@ func (s *Session) persistSink(ctx context.Context, ev agent.Event) error {
 // predicted — a cache-heavy turn, an unusually long tool result — and that
 // rejection is recoverable exactly once.
 func (s *Session) Prompt(ctx context.Context, text string) ([]ai.Message, error) {
+	return s.PromptContent(ctx, ai.UserContent{Text: text})
+}
+
+// PromptContent is Prompt for a message that is not only text — an attached
+// image, most often a screenshot of the thing being asked about.
+func (s *Session) PromptContent(ctx context.Context, content ai.UserContent) ([]ai.Message, error) {
 	// A compaction that fails is reported through the warnings, not by
 	// refusing the turn: the provider's own answer is a better diagnosis than
 	// tau declining pre-emptively, and it may well succeed.
@@ -646,7 +652,7 @@ func (s *Session) Prompt(ctx context.Context, text string) ([]ai.Message, error)
 		s.Warnings = append(s.Warnings, "compaction failed: "+err.Error())
 	}
 
-	msg := ai.UserMessage{Content: ai.UserContent{Text: text}, Timestamp: nowMillis()}
+	msg := ai.UserMessage{Content: content, Timestamp: nowMillis()}
 	out, err := s.Agent.Prompt(ctx, msg)
 	if err != nil || !s.overflowed(out) {
 		return out, err
@@ -661,7 +667,7 @@ func (s *Session) Prompt(ctx context.Context, text string) ([]ai.Message, error)
 		return out, err
 	}
 	return s.Agent.Prompt(ctx, ai.UserMessage{
-		Content:   ai.UserContent{Text: text},
+		Content:   content,
 		Timestamp: nowMillis(),
 	})
 }
