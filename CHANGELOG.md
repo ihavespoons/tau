@@ -4,6 +4,23 @@ All notable changes to tau are recorded here. Versions follow
 [semantic versioning](https://semver.org/); the `0.x` series is pre-1.0, so
 minor bumps may still change behaviour.
 
+## [0.33.0] - 2026-08-10
+
+- An evals harness, `evals`. A task is a prompt, a seeded working directory and
+  a check; the runner scores what the agent did and reports the failures first.
+  It answers the question no unit test does — whether a change made tau better
+  or worse at actual work.
+- Checks read what the agent *did*: the files it wrote, the tools it called.
+  What it changed on disk is the work; what it said about it is commentary.
+- A failed check and a failed run are separate results. "The agent did the wrong
+  thing" and "the agent broke" need different responses.
+- A turn that failed at the provider is an error, not a pass. A stream never
+  returns one — the failure arrives as a terminal event on the assistant
+  message — and a harness that trusted the error return alone would score a turn
+  that never happened as a success.
+- Each task runs in its own directory, so one task's mess cannot score another,
+  and a failed one is left on disk to be looked at.
+
 ## [0.32.0] - 2026-08-10
 
 - `tau --mode acp` speaks the Agent Client Protocol, so an editor that drives

@@ -726,6 +726,32 @@ editing a file or running a shell command, so anything that can reach the socket
 can run commands as you. It defaults to a Unix socket at mode 0600 for that
 reason. Think hard before `-listen` puts it on a port.
 
+## Evals
+
+`evals` runs a table of tasks against an agent and scores what it did, which is
+the question no unit test answers: whether a change to the prompt, the tools, or
+the model made tau better or worse at actual work.
+
+```go
+r := &evals.Runner{NewAgent: newAgent, Parallel: 4}
+results := r.Run(ctx, []evals.Task{{
+    Name:   "fixes the failing test",
+    Prompt: "make the test pass",
+    Files:  map[string]string{"main_test.go": "..."},
+    Check:  evals.All(evals.FileContains("main.go", "return 42"), evals.ToolCalled("edit")),
+}})
+fmt.Print(evals.Report(results))
+```
+
+Each task runs in its own seeded directory, so one task's mess cannot score
+another. The agent is supplied by the caller, which is what lets the same table
+run offline against `ai/faux` and against a real provider when it matters.
+
+Checks read what the agent *did* — the files it wrote, the tools it called — not
+only what it said, because the changes on disk are the work and the prose about
+them is commentary. A failed check and a failed run are reported separately: "the
+agent did the wrong thing" and "the agent broke" are different problems.
+
 ## MCP
 
 tau speaks the Model Context Protocol through a bundled extension. Configure
