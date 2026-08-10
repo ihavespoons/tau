@@ -3,8 +3,16 @@ package tui
 import (
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
+
+// colorEnabled reports whether the terminal takes styling at all. When output
+// is piped — or run under `go test` — lipgloss detects no terminal and strips
+// every style, and attributes written by hand have to follow the same rule or
+// they end up as escape sequences in a file meant to be plain.
+func colorEnabled() bool { return lipgloss.ColorProfile() != termenv.Ascii }
 
 // wrapBreakpoints are the characters wrapping may break after when a word is
 // longer than the line. Paths and identifiers dominate a coding transcript,
@@ -34,6 +42,35 @@ func wrapBlock(s string, width int) []string {
 
 // displayWidth is the rendered column count of a styled string.
 func displayWidth(s string) int { return ansi.StringWidth(s) }
+
+// Terminal attributes tau sets itself rather than through lipgloss.
+const (
+	sgrReset        = "\x1b[0m"
+	sgrUnderlineOn  = "\x1b[4m"
+	sgrUnderlineOff = "\x1b[24m"
+	sgrStrikeOn     = "\x1b[9m"
+	sgrStrikeOff    = "\x1b[29m"
+)
+
+// underlineANSI and strikeANSI turn an attribute on for a whole string.
+//
+// lipgloss is not used for these two: it applies them per character, re-emitting
+// the entire colour sequence for every rune, which turns a five-letter heading
+// into ten escape sequences. That is size the wrapper has to parse, the block
+// cache has to hold, and the terminal has to decode, on every line of every
+// heading and every piece of struck-through text.
+func underlineANSI(s string) string { return sgrSpan(s, sgrUnderlineOn, sgrUnderlineOff) }
+func strikeANSI(s string) string    { return sgrSpan(s, sgrStrikeOn, sgrStrikeOff) }
+
+// sgrSpan opens an attribute, re-opens it after every reset the inner styling
+// emitted, and closes it at the end. Without the re-opening, the first nested
+// colour run would cancel the attribute for the rest of the string.
+func sgrSpan(s, on, off string) string {
+	if s == "" || !colorEnabled() {
+		return s
+	}
+	return on + strings.ReplaceAll(s, sgrReset, sgrReset+on) + off
+}
 
 // truncateCells shortens a styled string to width columns, appending an
 // ellipsis when it had to cut.

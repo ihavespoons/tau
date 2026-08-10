@@ -27,7 +27,7 @@ type renderer struct {
 
 func newRenderer(theme Theme, width int, hideThinking bool) *renderer {
 	return &renderer{
-		theme: theme, md: newMarkdown(width), width: width,
+		theme: theme, md: newThemedMarkdown(width, theme), width: width,
 		hideThinking: hideThinking, toolOutputLines: 12,
 	}
 }

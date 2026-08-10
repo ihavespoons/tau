@@ -4,6 +4,21 @@ All notable changes to tau are recorded here. Versions follow
 [semantic versioning](https://semver.org/); the `0.x` series is pre-1.0, so
 minor bumps may still change behaviour.
 
+## [0.21.0] - 2026-08-10
+
+- Markdown is rendered by tau rather than by glamour. Your theme's ten `md*`
+  colours and nine `syntax*` colours now reach the screen — until this release
+  they were parsed, validated and ignored, and every transcript was painted
+  with glamour's own palette.
+- Code blocks keep their fences and language, and are highlighted with the
+  theme's syntax colours. Tables, task lists, nested lists, blockquotes and
+  strikethrough all render; long table cells wrap instead of being cut.
+- Headings, links and struck-through text no longer emit one full escape
+  sequence per character, which is what lipgloss does when asked for underline
+  or strikethrough. A heading is roughly a tenth of the bytes it was.
+- Prose still inherits the terminal's own foreground. A theme that declares no
+  colour for something renders plainly rather than in a colour tau invented.
+
 ## [0.20.0] - 2026-08-10
 
 - The last four slash commands: `/settings`, `/scoped-models`, `/import` and
