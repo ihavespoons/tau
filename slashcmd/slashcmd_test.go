@@ -234,6 +234,38 @@ func TestExportAndShareNeedAnExporterHost(t *testing.T) {
 	}
 }
 
+type stubChangelogger struct {
+	stubHost
+	text string
+}
+
+func (h *stubChangelogger) Changelog() string { return h.text }
+
+func TestChangelogNeedsAHostThatCarriesOne(t *testing.T) {
+	// A host with no release notes still advertises the command — the listing
+	// should not change shape depending on how tau was built.
+	r := NewRegistry()
+	RegisterBuiltins(r, &stubHost{})
+	c, ok := r.Lookup("changelog")
+	if !ok {
+		t.Fatal("/changelog was not registered")
+	}
+	if _, err := c.Run(context.Background(), ""); !errors.Is(err, ErrNotImplemented) {
+		t.Errorf("err = %v, want ErrNotImplemented", err)
+	}
+
+	r = NewRegistry()
+	RegisterBuiltins(r, &stubChangelogger{text: "## [0.1.0]\n- first"})
+	c, _ = r.Lookup("changelog")
+	res, err := c.Run(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, "0.1.0") {
+		t.Errorf("output = %q, want the release notes", res.Output)
+	}
+}
+
 func TestModelCommand(t *testing.T) {
 	host := &stubHost{models: []string{"claude-sonnet-5", "claude-opus-5"}, current: "claude-sonnet-5"}
 	r := NewRegistry()

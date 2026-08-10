@@ -38,12 +38,41 @@ const bashUpdateThrottle = 100 * time.Millisecond
 // maxTimeoutSeconds mirrors Pi's ceiling (Node's max 32-bit timer).
 const maxTimeoutSeconds = 2147483.647
 
-// Bash builds the bash tool against an environment.
+// sessionEnvNames are the variables a bash command sees, mirroring Pi's
+// PI_* set (bash.ts:166-180).
+//
+// Pi deletes any inherited value before writing its own. Go's exec has no way
+// to unset a variable, so every name is always written and the ones with no
+// value are written empty: a tau running inside another tau's bash tool must
+// not read the outer session's id as its own.
+var sessionEnvNames = []string{
+	"TAU_SESSION_ID",
+	"TAU_SESSION_FILE",
+	"TAU_PROVIDER",
+	"TAU_MODEL",
+	"TAU_REASONING_LEVEL",
+}
+
+// sessionEnvVars blanks the whole set, then layers on what the session knows.
+// Later entries win, which is how os/exec resolves a duplicated key.
+func sessionEnvVars(fn SessionEnv) []string {
+	out := make([]string, 0, 2*len(sessionEnvNames))
+	for _, name := range sessionEnvNames {
+		out = append(out, name+"=")
+	}
+	if fn == nil {
+		return out
+	}
+	return append(out, fn()...)
+}
+
+// Bash builds the bash tool against an environment. sessionEnv supplies the
+// TAU_* session metadata commands can read; nil exposes none.
 //
 // A non-zero exit is an *error* at the tool level even though env.Exec treats
 // it as data: the model needs a failed command to read as failure. Output
 // truncation keeps the tail, since errors and results land at the end.
-func Bash(e env.Env) agent.Tool {
+func Bash(e env.Env, sessionEnv SessionEnv) agent.Tool {
 	return agent.MustNew("bash", "bash", bashDescription,
 		func(ctx context.Context, _ string, p BashParams, update agent.UpdateFunc) (agent.ToolResult, error) {
 			if p.Command == "" {
@@ -83,6 +112,7 @@ func Bash(e env.Env) agent.Tool {
 
 			res, err := e.Exec(ctx, p.Command, env.ExecOptions{
 				Timeout:        timeout,
+				Env:            sessionEnvVars(sessionEnv),
 				MaxOutputBytes: DefaultMaxBytes,
 				OnOutput:       onOutput,
 			})

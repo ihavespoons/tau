@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // Builtin describes a built-in command. Names and descriptions are ported
@@ -92,6 +93,50 @@ type Exporter interface {
 	ShareSession(ctx context.Context) (string, error)
 }
 
+// Changelogger is the optional surface for /changelog. It is separate from
+// Host because release notes belong to the binary rather than to the session:
+// a program embedding tau as a library ships its own, or none.
+type Changelogger interface {
+	// Changelog renders the release notes for display.
+	Changelog() string
+}
+
+// ModelScoper is the optional surface for /scoped-models: the set of models
+// the model-cycling shortcut moves between, and the saved patterns that choose
+// them. A host with nowhere to save settings does not implement it.
+type ModelScoper interface {
+	// ScopedModels renders the cycle set and how it was configured.
+	ScopedModels() string
+	// SetScopedModels saves patterns as the cycle set. No patterns clears it,
+	// putting every model back in the cycle.
+	SetScopedModels(ctx context.Context, patterns []string) (string, error)
+}
+
+// Importer is the optional surface for /import: adopting a session file
+// written elsewhere. It sits with Exporter rather than in Host for the same
+// reason — a host not backed by session files has nothing to import into.
+type Importer interface {
+	// ImportSession adopts the session at path and continues it, returning
+	// what to tell the user.
+	ImportSession(ctx context.Context, path string) (string, error)
+}
+
+// SettingsStore is the optional surface for /settings: reading the merged
+// configuration and writing to it.
+type SettingsStore interface {
+	// SettingsList renders every configured value with its scope.
+	SettingsList() string
+	// SettingsGet renders one key.
+	SettingsGet(key string) (string, error)
+	// SettingsSet writes a key, reading value as JSON when it parses as JSON
+	// and as a string when it does not.
+	SettingsSet(ctx context.Context, key, value string) (string, error)
+	// SettingsUnset removes a key.
+	SettingsUnset(ctx context.Context, key string) (string, error)
+	// SettingsKeys lists the keys worth completing.
+	SettingsKeys() []string
+}
+
 // Interactive is the extra surface a host with a UI provides. Built-in
 // commands that must ask the user something are wired only when the host
 // implements it; a headless host leaves them advertised but unimplemented.
@@ -130,6 +175,10 @@ type Interactive interface {
 func RegisterBuiltins(r *Registry, host Host) {
 	ui, _ := host.(Interactive)
 	exp, _ := host.(Exporter)
+	log, _ := host.(Changelogger)
+	scoper, _ := host.(ModelScoper)
+	store, _ := host.(SettingsStore)
+	imp, _ := host.(Importer)
 
 	for _, b := range Builtins {
 		info := Info{
@@ -212,6 +261,41 @@ func RegisterBuiltins(r *Registry, host Host) {
 			r.Register(New(info, exportOp(exp, func(ctx context.Context, _ string) (string, error) {
 				return exp.ShareSession(ctx)
 			})))
+		case "import":
+			info.ArgumentHint = "<path.jsonl>"
+			if imp == nil {
+				r.Register(New(info, nil))
+				break
+			}
+			r.Register(New(info, sessionOp2(host, func(ctx context.Context, args string) (string, error) {
+				return imp.ImportSession(ctx, strings.TrimSpace(args))
+			})))
+		case "settings":
+			// Pi opens a toggle menu here, so its entry carries no hint.
+			info.ArgumentHint = "[<key> [value] | unset <key>]"
+			if store == nil {
+				r.Register(New(info, nil))
+				break
+			}
+			r.Register(NewWithCompleter(info, settingsRun(store), settingsComplete(store)))
+		case "scoped-models":
+			// The hint is set here rather than in the ported table: Pi's
+			// command takes no arguments because it opens a picker, and this
+			// one does.
+			info.ArgumentHint = "<pattern>... | all"
+			if scoper == nil {
+				r.Register(New(info, nil))
+				break
+			}
+			r.Register(New(info, scopedModelsRun(scoper)))
+		case "changelog":
+			if log == nil {
+				r.Register(New(info, nil))
+				break
+			}
+			r.Register(New(info, func(context.Context, string) (Result, error) {
+				return Result{Output: log.Changelog()}, nil
+			}))
 		default:
 			r.Register(New(info, nil)) // advertised; ErrNotImplemented when run
 		}
@@ -289,6 +373,82 @@ func exportOp(exp Exporter, fn func(context.Context, string) (string, error)) fu
 	}
 	return func(ctx context.Context, args string) (Result, error) {
 		out, err := fn(ctx, args)
+		return Result{Output: out}, err
+	}
+}
+
+// settingsRun serves /settings: no argument lists the configuration, a key
+// alone reads it, a key and a value writes it, and "unset <key>" removes it.
+//
+// The value keeps its spaces — a JSON array or an editor command line is one
+// argument even though it looks like several.
+func settingsRun(store SettingsStore) func(context.Context, string) (Result, error) {
+	return func(ctx context.Context, args string) (Result, error) {
+		args = strings.TrimSpace(args)
+		if args == "" {
+			return Result{Output: store.SettingsList()}, nil
+		}
+
+		key, value, _ := strings.Cut(args, " ")
+		value = strings.TrimSpace(value)
+
+		if strings.EqualFold(key, "unset") {
+			out, err := store.SettingsUnset(ctx, value)
+			return Result{Output: out}, err
+		}
+		if value == "" {
+			out, err := store.SettingsGet(key)
+			return Result{Output: out}, err
+		}
+		out, err := store.SettingsSet(ctx, key, value)
+		return Result{Output: out}, err
+	}
+}
+
+// settingsComplete offers key names, and offers them again after "unset".
+func settingsComplete(store SettingsStore) func(string) []Item {
+	return func(prefix string) []Item {
+		lead := ""
+		if rest, ok := cutFold(prefix, "unset "); ok {
+			lead, prefix = "unset ", rest
+		}
+		var out []Item
+		for _, k := range store.SettingsKeys() {
+			if strings.HasPrefix(k, prefix) {
+				out = append(out, Item{Value: lead + k, Label: k})
+			}
+		}
+		return out
+	}
+}
+
+// cutFold is strings.CutPrefix with a case-insensitive prefix.
+func cutFold(s, prefix string) (string, bool) {
+	if len(s) < len(prefix) || !strings.EqualFold(s[:len(prefix)], prefix) {
+		return s, false
+	}
+	return s[len(prefix):], true
+}
+
+// scopedModelsRun serves /scoped-models: no argument reports the cycle set,
+// patterns replace it, and "all" or "reset" clears it.
+//
+// Pi opens a multi-select for this. tau's picker is a later phase; the command
+// is the honest headless shape of the same feature, and typing patterns is
+// faster than ticking boxes when you already know what you want.
+func scopedModelsRun(scoper ModelScoper) func(context.Context, string) (Result, error) {
+	return func(ctx context.Context, args string) (Result, error) {
+		args = strings.TrimSpace(args)
+		if args == "" {
+			return Result{Output: scoper.ScopedModels()}, nil
+		}
+		var patterns []string
+		if !strings.EqualFold(args, "all") && !strings.EqualFold(args, "reset") {
+			patterns = strings.FieldsFunc(args, func(r rune) bool {
+				return unicode.IsSpace(r) || r == ','
+			})
+		}
+		out, err := scoper.SetScopedModels(ctx, patterns)
 		return Result{Output: out}, err
 	}
 }

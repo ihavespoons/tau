@@ -8,23 +8,37 @@ import (
 	"github.com/ihavespoons/tau/agent/env"
 )
 
+// SessionEnv reports the TAU_* variables describing the running session, as
+// KEY=VALUE pairs. It is consulted per command rather than once, because the
+// model and reasoning level change while a session is alive.
+//
+// A nil SessionEnv exposes nothing, which is how a bare tool set behaves.
+type SessionEnv func() []string
+
 // CodingTools is the default tool set for a coding agent: read, bash, edit,
 // write — the same four Pi's createCodingTools ships.
 //
 // Each tool carries the system-prompt snippet and guidelines Pi gives it, so
 // prompt.Build can advertise them without a second source of truth.
-func CodingTools(e env.Env) []agent.Tool {
+func CodingTools(e env.Env, sessionEnv SessionEnv) []agent.Tool {
+	// Pi's bash guideline points the model at the session metadata variables
+	// (bash.ts:330). It is only worth saying when something will actually set
+	// them: telling the model to inspect variables that do not exist buys a
+	// wasted tool call.
+	var bashGuidelines []string
+	if sessionEnv != nil {
+		bashGuidelines = []string{
+			"Inspect TAU_* environment variables for current model and session details.",
+		}
+	}
+
 	return []agent.Tool{
 		promptMeta(Read(e),
 			"Read file contents",
 			"Use read to examine files instead of cat or sed."),
-		// Pi's bash guideline points the model at PI_* environment variables
-		// carrying model and session metadata. tau does not export those yet
-		// (they land with the environment-variable work in P9), and telling
-		// the model to inspect variables that do not exist just buys a wasted
-		// tool call — so the guideline stays out until the feature is real.
-		promptMeta(Bash(e),
-			"Execute bash commands"),
+		promptMeta(Bash(e, sessionEnv),
+			"Execute bash commands",
+			bashGuidelines...),
 		promptMeta(Grep(e),
 			"Search file contents for patterns (respects .gitignore)",
 			"Use grep to search file contents instead of shelling out to grep or rg."),

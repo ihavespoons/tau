@@ -61,6 +61,10 @@ type Options struct {
 	// UI is the host's interactive surface, handed to extensions and to the
 	// built-in commands that need to ask the user something. Nil is headless.
 	UI extension.UI
+	// Changelog is the release notes /changelog shows, as a Keep-a-Changelog
+	// document. Empty means the binary ships none, and the command says so.
+	// cmd/tau passes the copy embedded at the repository root.
+	Changelog string
 	// Interactive supplies the built-in commands that need dialogs. The host
 	// may pass a value whose session pointer is filled in after New returns —
 	// nothing calls it during construction.
@@ -254,9 +258,25 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 		return nil, err
 	}
 
+	ui := opts.UI
+	if ui == nil {
+		ui = extension.NoUI{}
+	}
+	mode := opts.Mode
+	if mode == "" {
+		mode = extension.ModePrint
+	}
+
 	// Trust is decided before anything project-scoped is read, because the
 	// project's own settings must not be able to influence the decision.
-	tr := resolveTrust(cwd, opts.Mode == extension.ModeTUI, opts.TrustOverride)
+	//
+	// Extensions vote first, so the ones entitled to vote are started first;
+	// everything else waits for the answer. See votingExtensions.
+	extRunner, voteWarnings := votingExtensions(ctx, cwd, mode, ui, opts)
+	tr := resolveTrust(cwd, mode == extension.ModeTUI, opts.TrustOverride, trustVote(ctx, extRunner))
+	if extRunner != nil {
+		extRunner.SetTrusted(tr.Trusted)
+	}
 
 	setMgr, set, err := loadSettings(cwd, tr.Trusted)
 	if err != nil {
@@ -274,25 +294,26 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 		return nil, err
 	}
 
+	// The session exists before the tools do, because the bash tool reads the
+	// session's own metadata (id, file, model) back out of it at call time.
+	cs := &Session{
+		Env: e, Model: model, Trust: tr, Cwd: cwd,
+		Models: reg, Settings: set, setMgr: setMgr, store: store, opts: opts,
+	}
+
 	var toolset []agent.Tool
 	if !opts.NoTools {
-		toolset = tools.CodingTools(e)
+		toolset = tools.CodingTools(e, cs.sessionEnv)
 	}
 
 	res := loadResources(cwd, tr.Trusted, setMgr, set, opts)
 	systemPrompt := buildSystemPrompt(cwd, toolset, res.skills, opts)
 
-	ui := opts.UI
-	if ui == nil {
-		ui = extension.NoUI{}
-	}
-
-	cs := &Session{
-		Env: e, Model: model, Trust: tr, Cwd: cwd,
-		Models: reg, Settings: set, setMgr: setMgr, UI: ui, store: store, opts: opts,
-		Skills: res.skills, Prompts: res.prompts, pkgs: res.packages,
-		Warnings: append(modelWarnings, res.warnings...),
-	}
+	cs.UI = ui
+	cs.Extensions = extRunner
+	cs.Skills, cs.Prompts, cs.pkgs = res.skills, res.prompts, res.packages
+	cs.Warnings = append(modelWarnings, res.warnings...)
+	cs.Warnings = append(cs.Warnings, voteWarnings...)
 
 	// Restore transcript from disk when resuming.
 	var restored []ai.Message
@@ -338,12 +359,13 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 		}
 	}
 
-	// Load extensions, then let them contribute tools before the agent is
-	// built. A failing extension is reported but never blocks startup.
-	mode := opts.Mode
-	if mode == "" {
-		mode = extension.ModePrint
-	}
+	// Load the rest of the extensions, then let them contribute tools before
+	// the agent is built. A failing extension is reported but never blocks
+	// startup.
+	//
+	// "The rest" because the ones entitled to a project_trust vote are already
+	// running: the loader skips what it has spawned, so this call adds the
+	// project's extensions and nothing else runs twice.
 	cs.builtinTools = append([]agent.Tool{}, toolset...)
 
 	loadedExts := append([]extension.Extension{}, opts.Extensions...)
@@ -365,12 +387,16 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 		cs.Warnings = append(cs.Warnings, warnings...)
 	}
 	if len(loadedExts) > 0 {
-		cs.Extensions = extension.NewRunner(extension.RunnerOptions{
-			Mode: mode, Cwd: cwd, Trusted: tr.Trusted, UI: ui,
-		})
+		if cs.Extensions == nil {
+			cs.Extensions = extension.NewRunner(extension.RunnerOptions{
+				Mode: mode, Cwd: cwd, Trusted: tr.Trusted, UI: ui,
+			})
+		}
 		for _, e := range loadedExts {
 			_ = cs.Extensions.Load(e)
 		}
+	}
+	if cs.Extensions != nil {
 		toolset = append(toolset, cs.Extensions.Tools()...)
 	}
 	cs.allTools = toolset

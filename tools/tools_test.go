@@ -25,7 +25,7 @@ func newTestTools(t *testing.T) (map[string]agent.Tool, string) {
 		t.Fatalf("osenv.New: %v", err)
 	}
 	byName := map[string]agent.Tool{}
-	for _, tool := range CodingTools(e) {
+	for _, tool := range CodingTools(e, nil) {
 		byName[tool.Def().Name] = tool
 	}
 	return byName, dir
@@ -353,6 +353,87 @@ func TestBashTool(t *testing.T) {
 	}
 	if details.ExitCode != 0 {
 		t.Errorf("exitCode = %d", details.ExitCode)
+	}
+}
+
+// The session metadata is read per command, not captured once, because the
+// model and reasoning level change while a session runs.
+func TestBashExposesSessionEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	e, err := osenv.New(osenv.Options{Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	model := "claude-opus-5"
+	bash := Bash(e, func() []string {
+		return []string{"TAU_MODEL=" + model, "TAU_SESSION_ID=abc123"}
+	})
+
+	res, err := run(t, bash, BashParams{Command: `echo "$TAU_MODEL/$TAU_SESSION_ID"`})
+	if err != nil {
+		t.Fatalf("bash: %v", err)
+	}
+	if got := strings.TrimSpace(resultText(res)); got != "claude-opus-5/abc123" {
+		t.Errorf("output = %q, want the session metadata", got)
+	}
+
+	model = "claude-sonnet-5"
+	res, err = run(t, bash, BashParams{Command: `echo "$TAU_MODEL"`})
+	if err != nil {
+		t.Fatalf("bash: %v", err)
+	}
+	if got := strings.TrimSpace(resultText(res)); got != "claude-sonnet-5" {
+		t.Errorf("output = %q, want the model switch to be visible", got)
+	}
+}
+
+// A tau running inside another tau's bash tool inherits the outer session's
+// variables. Reporting those as its own would be worse than reporting none.
+func TestBashMasksInheritedSessionEnvironment(t *testing.T) {
+	t.Setenv("TAU_SESSION_ID", "outer-session")
+	t.Setenv("TAU_MODEL", "outer-model")
+
+	dir := t.TempDir()
+	e, err := osenv.New(osenv.Options{Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := run(t, Bash(e, nil), BashParams{Command: `echo "[$TAU_SESSION_ID][$TAU_MODEL]"`})
+	if err != nil {
+		t.Fatalf("bash: %v", err)
+	}
+	if got := strings.TrimSpace(resultText(res)); got != "[][]" {
+		t.Errorf("output = %q, want the inherited values blanked", got)
+	}
+}
+
+// The guideline tells the model to go looking for these variables, so it must
+// only be present when something actually sets them.
+func TestBashGuidelineTracksSessionEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	e, err := osenv.New(osenv.Options{Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	guidelines := func(sessionEnv SessionEnv) []string {
+		for _, tool := range CodingTools(e, sessionEnv) {
+			if tool.Def().Name == "bash" {
+				return tool.Def().PromptGuidelines
+			}
+		}
+		t.Fatal("no bash tool in the coding tool set")
+		return nil
+	}
+
+	if got := guidelines(nil); len(got) != 0 {
+		t.Errorf("guidelines = %q, want none without session metadata", got)
+	}
+	got := guidelines(func() []string { return nil })
+	if len(got) != 1 || !strings.Contains(got[0], "TAU_*") {
+		t.Errorf("guidelines = %q, want the TAU_* hint", got)
 	}
 }
 

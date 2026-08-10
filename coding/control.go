@@ -9,6 +9,7 @@ import (
 
 	"github.com/ihavespoons/tau/agent"
 	"github.com/ihavespoons/tau/ai"
+	"github.com/ihavespoons/tau/changelog"
 	"github.com/ihavespoons/tau/extension"
 	"github.com/ihavespoons/tau/models"
 	"github.com/ihavespoons/tau/session"
@@ -586,4 +587,44 @@ func (h codingHost) ExportSession(ctx context.Context, path string) (string, err
 // ShareSession uploads the exported session as a secret gist.
 func (h codingHost) ShareSession(ctx context.Context) (string, error) {
 	return h.s.ShareSession(ctx)
+}
+
+// ImportSession adopts a session file. See Session.ImportSession.
+func (h codingHost) ImportSession(ctx context.Context, path string) (string, error) {
+	return h.s.ImportSession(ctx, path)
+}
+
+// SettingsList renders the merged configuration. See Session.SettingsList.
+func (h codingHost) SettingsList() string { return h.s.SettingsList() }
+
+// SettingsGet reads one key. See Session.SettingsGet.
+func (h codingHost) SettingsGet(key string) (string, error) { return h.s.SettingsGet(key) }
+
+// SettingsSet writes one key. See Session.SettingsSet.
+func (h codingHost) SettingsSet(ctx context.Context, key, value string) (string, error) {
+	return h.s.SettingsSet(ctx, key, value)
+}
+
+// SettingsUnset removes one key. See Session.SettingsUnset.
+func (h codingHost) SettingsUnset(ctx context.Context, key string) (string, error) {
+	return h.s.SettingsUnset(ctx, key)
+}
+
+// SettingsKeys lists the keys tau models, for completion.
+func (h codingHost) SettingsKeys() []string { return h.s.SettingsKeys() }
+
+// ScopedModels renders the model-cycling set. See Session.ScopedModels.
+func (h codingHost) ScopedModels() string { return h.s.ScopedModels() }
+
+// SetScopedModels saves the model-cycling set. See Session.SetScopedModels.
+func (h codingHost) SetScopedModels(ctx context.Context, patterns []string) (string, error) {
+	return h.s.SetScopedModels(ctx, patterns)
+}
+
+// Changelog renders the release notes the binary was built with, oldest first.
+//
+// The text is supplied rather than read: the changelog belongs to whoever
+// built the program, and a session has no way to find it on disk.
+func (h codingHost) Changelog() string {
+	return changelog.Render(h.s.opts.Changelog)
 }

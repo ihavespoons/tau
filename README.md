@@ -8,9 +8,10 @@ dependencies.
 > **Status: early development.** tau is being built in phases toward parity with
 > Pi v0.82.1. The interactive agent, all ten wire APIs, session trees, Pi
 > import, the extension system, themes, keybindings, skills, prompt templates,
-> the package manager and HTML export/share are in; a handful of slash commands
-> (`/settings`, `/scoped-models`, `/import`, `/changelog`) and the TUI polish
-> pass are still landing.
+> the package manager, HTML export/share and the full slash-command set are in;
+> the TUI polish pass is still landing. `/settings` and `/scoped-models` are
+> typed commands here rather than Pi's toggle menus — the pickers come with
+> that pass.
 >
 > **tau does not ask before it acts.** It edits files and runs shell commands
 > without a confirmation prompt. Run it on a clean git tree or in a scratch
@@ -335,6 +336,45 @@ which most do not report to tau yet; `ctrl+j` is the one that always works. And
 the table carries the full set of Pi's ids, but a few actions behind them are
 still landing — external editor, image paste, the kill ring, and undo are P10
 work, so binding those ids does nothing today.
+
+## Settings
+
+`/settings` reads and writes the merged configuration without leaving the
+session:
+
+```
+/settings                          # what is set, and which file it came from
+/settings theme                    # one key
+/settings theme gruvbox-dark       # write it to ~/.tau/settings.json
+/settings compaction.enabled false # one level of nesting
+/settings unset theme              # remove it
+```
+
+A value is read as JSON when it parses as JSON and as a string when it does
+not, so `true` is a boolean, `2` is a number, `["pnpm","add"]` is a list, and
+`gruvbox-dark` is a string. Writes go to the global file; project settings are
+listed with their scope but edited in `.tau/settings.json` directly, since a
+directory tau has not trusted must not be written to on a one-line command.
+Keys tau does not model are kept in the file and reported as unread rather than
+rejected — an extension may own them.
+
+`/scoped-models` narrows the set `ctrl+p` cycles through:
+
+```
+/scoped-models                                 # the current set
+/scoped-models anthropic/* openai/gpt-5.2      # patterns, saved to settings
+/scoped-models all                             # back to the whole catalog
+```
+
+Patterns are matched against both `provider/id` and the bare id, so
+`anthropic/*` also picks up the same models offered through a reseller. A
+pattern matching nothing is refused rather than saved, because an empty set
+silently falls back to every model.
+
+`/changelog` prints what changed in each release, oldest first, from the copy
+compiled into the binary. `/import <path>.jsonl` is the other half of
+`/export`: it copies a session file into this directory's history and continues
+it, leaving the file you pointed at untouched.
 
 ## Extensions
 

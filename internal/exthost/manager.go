@@ -3,6 +3,7 @@ package exthost
 import (
 	"context"
 	"os/exec"
+	"strings"
 	"sync"
 
 	"github.com/ihavespoons/tau/extension"
@@ -23,6 +24,11 @@ type Manager struct {
 
 	mu    sync.Mutex
 	hosts []*Host
+	// loaded keys the candidates already running, so a second Load adds to
+	// the set rather than spawning everything twice. Startup calls Load twice
+	// on purpose: once before the project-trust decision, for the extensions
+	// that get to vote on it, and once after, for the project's own.
+	loaded map[string]bool
 	// errs collects load failures, so one broken extension is reported rather
 	// than preventing startup.
 	errs []error
@@ -56,18 +62,26 @@ func (m *Manager) options() Options {
 	return m.opts
 }
 
-// Load spawns every candidate and returns the extensions that came up.
+// Load spawns every candidate that is not already running and returns the
+// extensions that came up.
 //
 // A candidate that fails to spawn is recorded and skipped. Refusing to start
 // because one extension is broken would make a single bad file in
 // ~/.tau/agent/extensions unbootable, and the user would have no session in
 // which to fix it.
+//
+// Calling Load again is additive: candidates already running are skipped, so
+// startup can ask for the trust-independent extensions first and the rest once
+// the project-trust decision is in.
 func (m *Manager) Load(ctx context.Context, cands []Candidate) []extension.Extension {
 	var out []extension.Extension
 	for _, c := range cands {
 		spec, err := SpecFor(c, m.lookPath())
 		if err != nil {
 			m.addErr(err)
+			continue
+		}
+		if m.alreadyLoaded(specKey(spec)) {
 			continue
 		}
 		h, err := Spawn(ctx, spec, m.options())
@@ -77,10 +91,27 @@ func (m *Manager) Load(ctx context.Context, cands []Candidate) []extension.Exten
 		}
 		m.mu.Lock()
 		m.hosts = append(m.hosts, h)
+		if m.loaded == nil {
+			m.loaded = map[string]bool{}
+		}
+		m.loaded[specKey(spec)] = true
 		m.mu.Unlock()
 		out = append(out, h.Extension())
 	}
 	return out
+}
+
+// specKey identifies a candidate across Load calls. Path is what discovery
+// found; the command line disambiguates the case where two candidates resolve
+// to the same file through different runners.
+func specKey(spec Spec) string {
+	return spec.Path + "\x00" + spec.Command + "\x00" + strings.Join(spec.Args, "\x00")
+}
+
+func (m *Manager) alreadyLoaded(key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.loaded[key]
 }
 
 func (m *Manager) lookPath() func(string) (string, error) {
@@ -128,6 +159,7 @@ func (m *Manager) Stop(reason string) {
 	hosts := m.Hosts()
 	m.mu.Lock()
 	m.hosts = nil
+	m.loaded = nil
 	m.mu.Unlock()
 
 	// Shutting down in parallel, because the grace periods are per process and

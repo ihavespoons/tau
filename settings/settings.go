@@ -195,6 +195,24 @@ func init() {
 	}
 }
 
+// Keys lists the top-level settings keys tau models, sorted. Other keys are
+// accepted and preserved verbatim across writes, but nothing in tau reads
+// them — which is exactly what a caller offering completions wants to say.
+func Keys() []string {
+	out := make([]string, 0, len(knownKeys))
+	for k := range knownKeys {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Known reports whether tau models a top-level key.
+func Known(key string) bool {
+	_, ok := knownKeys[key]
+	return ok
+}
+
 // UnmarshalJSON decodes known fields and captures the rest into Extra.
 func (s *Settings) UnmarshalJSON(data []byte) error {
 	type alias Settings

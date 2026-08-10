@@ -276,6 +276,20 @@ type Request struct {
 	ConfigDirName string
 	// HomeDir is used to exclude the user's global skills directory.
 	HomeDir string
+	// Vote lets extensions decide before the saved decision is read
+	// (project-trust.ts:53-68). Nil, or a nil return, falls through to the
+	// store. Only extensions that load without project trust can be asked —
+	// a project's own extension deciding whether to trust that project would
+	// be circular.
+	Vote func(cwd string) *Verdict
+}
+
+// Verdict is an extension's answer to the project_trust hook.
+type Verdict struct {
+	// Trusted is the decision.
+	Trusted bool
+	// Remember saves the decision for future sessions.
+	Remember bool
 }
 
 // Outcome is the result of a trust decision.
@@ -285,6 +299,10 @@ type Outcome struct {
 	// NeedsPrompt reports that the caller should ask the user; Trusted is
 	// false until they answer.
 	NeedsPrompt bool
+	// Remember asks the caller to save Trusted for future sessions. Only an
+	// extension vote sets it — every other path either read the store or has
+	// nothing new to record.
+	Remember bool
 	// Reason explains the decision, for diagnostics.
 	Reason string
 }
@@ -294,12 +312,10 @@ type Outcome struct {
 // Order (project-trust.ts:46-96):
 //  1. an explicit override wins
 //  2. no gated resources means nothing to gate — trusted
-//  3. a stored decision (nearest ancestor) wins
-//  4. the global default: always/never decide, ask continues
-//  5. no UI denies; otherwise the caller must prompt
-//
-// The extension `project_trust` hook sits between 2 and 3 in Pi; that hook
-// arrives with the extension system, and this ordering leaves room for it.
+//  3. an extension's project_trust vote wins
+//  4. a stored decision (nearest ancestor) wins
+//  5. the global default: always/never decide, ask continues
+//  6. no UI denies; otherwise the caller must prompt
 func Decide(store *Store, req Request) (Outcome, error) {
 	if req.Override != nil {
 		return Outcome{Trusted: *req.Override, Reason: "override"}, nil
@@ -310,6 +326,15 @@ func Decide(store *Store, req Request) (Outcome, error) {
 	}
 	if !HasGatedResources(req.Cwd, configDir, req.HomeDir) {
 		return Outcome{Trusted: true, Reason: "no project resources require trust"}, nil
+	}
+	if req.Vote != nil {
+		if v := req.Vote(req.Cwd); v != nil {
+			return Outcome{
+				Trusted:  v.Trusted,
+				Remember: v.Remember,
+				Reason:   "decided by an extension",
+			}, nil
+		}
 	}
 	if store != nil {
 		decision, err := store.Lookup(req.Cwd)

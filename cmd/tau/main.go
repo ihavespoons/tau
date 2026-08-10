@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/ihavespoons/tau"
 	"github.com/ihavespoons/tau/agent"
 	"github.com/ihavespoons/tau/ai"
 	"github.com/ihavespoons/tau/ai/auth"
@@ -169,6 +170,7 @@ flags:
 			SessionPath:   *sessPath,
 			Mode:          extension.ModeRPC,
 			TrustOverride: trustOverride,
+			Changelog:     tau.Changelog,
 			Extensions:    bundledExtensions(),
 
 			ExternalExtensions: loader,
@@ -191,6 +193,7 @@ flags:
 			Resume:        *cont,
 			SessionPath:   *sessPath,
 			TrustOverride: trustOverride,
+			Changelog:     tau.Changelog,
 			Extensions:    bundledExtensions(),
 
 			ExternalExtensions: newSubprocessLoader(exts),
@@ -212,6 +215,7 @@ flags:
 		SessionPath:   *sessPath,
 		Mode:          extMode,
 		TrustOverride: trustOverride,
+		Changelog:     tau.Changelog,
 		Extensions:    bundledExtensions(),
 
 		ExternalExtensions: newSubprocessLoader(exts),

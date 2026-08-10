@@ -95,6 +95,23 @@ func (r *Runner) Bind(rt Runtime) {
 	}
 }
 
+// SetTrusted records the project-trust decision reported by
+// API.IsProjectTrusted and Context.IsProjectTrusted.
+//
+// It exists because the decision can be made after extensions are loaded: the
+// project_trust hook is asked by extensions that are already running, and the
+// answer has to reach them and everything loaded afterwards.
+func (r *Runner) SetTrusted(trusted bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.trusted = trusted
+	for _, a := range r.apis {
+		a.mu.Lock()
+		a.trusted = trusted
+		a.mu.Unlock()
+	}
+}
+
 // SetSystemPrompt records the prompt reported by Context.SystemPrompt.
 func (r *Runner) SetSystemPrompt(s string) {
 	r.mu.Lock()
