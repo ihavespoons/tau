@@ -652,6 +652,24 @@ Commands go in, responses and events come out, one JSON value per line. Unlike
 navigate the session tree, or answer a dialog an extension opened. The command
 and event shapes are Pi's, so a client written against Pi drives tau unchanged.
 
+Sessions are JSONL files by default, one per session. A program embedding tau
+can put them somewhere else instead:
+
+```go
+repo, err := sqlite.Open("/var/lib/tau/sessions.db")
+cs, err := coding.New(ctx, coding.Options{Repo: repo})
+```
+
+`storage/sqlite` is the backend that ships. It exists for what the file layout
+is bad at — thousands of sessions, a listing that would otherwise mean opening
+every file to read its first line, and querying from outside tau — and it is a
+satellite: the binary does not import it, so nothing is linked into `tau` unless
+you ask for it. The driver is pure Go, so `CGO_ENABLED=0` still holds.
+
+Entries are stored as the bytes they were written as and replayed through the
+same decoder and the same `session.Index` the file backend uses, so the two can
+never disagree about what a session means.
+
 ## MCP
 
 tau speaks the Model Context Protocol through a bundled extension. Configure

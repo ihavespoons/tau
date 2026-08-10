@@ -10,14 +10,14 @@ import (
 type MemStorage struct {
 	mu   sync.RWMutex
 	meta Metadata
-	ix   *index
+	ix   *Index
 }
 
 var _ Storage = (*MemStorage)(nil)
 
 // NewMemStorage creates an empty in-memory session.
 func NewMemStorage(meta Metadata) *MemStorage {
-	return &MemStorage{meta: meta, ix: newIndex()}
+	return &MemStorage{meta: meta, ix: NewIndex()}
 }
 
 func (s *MemStorage) Metadata(context.Context) (Metadata, error) {
@@ -29,76 +29,76 @@ func (s *MemStorage) Metadata(context.Context) (Metadata, error) {
 func (s *MemStorage) LeafID(context.Context) (*string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ix.leaf()
+	return s.ix.Leaf()
 }
 
 func (s *MemStorage) SetLeafID(ctx context.Context, leafID *string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if leafID != nil {
-		if _, ok := s.ix.get(*leafID); !ok {
+		if _, ok := s.ix.Get(*leafID); !ok {
 			return errorf(CodeNotFound, nil, "entry %s not found", *leafID)
 		}
 	}
 	entry := &LeafEntry{
-		EntryBase: EntryBase{ID: s.ix.createEntryID(), ParentID: s.ix.leafID, Timestamp: Now()},
+		EntryBase: EntryBase{ID: s.ix.CreateEntryID(), ParentID: s.ix.Head(), Timestamp: Now()},
 		TargetID:  leafID,
 	}
-	s.ix.add(entry)
+	s.ix.Add(entry)
 	return nil
 }
 
 func (s *MemStorage) CreateEntryID(context.Context) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.ix.createEntryID(), nil
+	return s.ix.CreateEntryID(), nil
 }
 
 func (s *MemStorage) AppendEntry(_ context.Context, entry Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.ix.add(entry)
+	s.ix.Add(entry)
 	return nil
 }
 
 func (s *MemStorage) GetEntry(_ context.Context, id string) (Entry, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ix.get(id)
+	return s.ix.Get(id)
 }
 
 func (s *MemStorage) FindEntries(_ context.Context, entryType string) []Entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ix.find(entryType)
+	return s.ix.Find(entryType)
 }
 
 func (s *MemStorage) Label(_ context.Context, id string) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ix.label(id)
+	return s.ix.Label(id)
 }
 
 func (s *MemStorage) SessionName(context.Context) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ix.sessionName()
+	return s.ix.SessionName()
 }
 
 func (s *MemStorage) Stats(context.Context) Stats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ix.stats()
+	return s.ix.Stats()
 }
 
 func (s *MemStorage) PathToRootOrCompaction(_ context.Context, leafID *string) ([]Entry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ix.pathToRootOrCompaction(leafID)
+	return s.ix.PathToRootOrCompaction(leafID)
 }
 
 func (s *MemStorage) Entries(_ context.Context, opts *CursorOptions) []Entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ix.slice(opts)
+	return s.ix.Slice(opts)
 }

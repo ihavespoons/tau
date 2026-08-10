@@ -41,6 +41,10 @@ type Options struct {
 	NoTools bool
 	// NoSession skips persistence (useful for one-shot runs).
 	NoSession bool
+	// Repo stores sessions. Nil means JSONL files under ~/.tau/sessions,
+	// which is what the binary uses; an embedder supplies its own to put
+	// sessions somewhere else — storage/sqlite is the one that ships.
+	Repo session.Repo
 	// AppendSystemPrompt is appended after the built system prompt.
 	AppendSystemPrompt string
 	// NoSkills disables skill discovery.
@@ -318,7 +322,10 @@ func New(ctx context.Context, opts Options) (*Session, error) {
 	// Restore transcript from disk when resuming.
 	var restored []ai.Message
 	if !opts.NoSession {
-		repo := session.NewJSONLRepo(config.SessionsDir())
+		repo := opts.Repo
+		if repo == nil {
+			repo = session.NewJSONLRepo(config.SessionsDir())
+		}
 		cs.repo = repo
 
 		var sess *session.Session

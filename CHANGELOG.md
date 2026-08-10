@@ -4,6 +4,25 @@ All notable changes to tau are recorded here. Versions follow
 [semantic versioning](https://semver.org/); the `0.x` series is pre-1.0, so
 minor bumps may still change behaviour.
 
+## [0.30.0] - 2026-08-10
+
+- A SQLite session backend, `storage/sqlite`. It exists for what one-file-per-
+  session is bad at: thousands of sessions, a listing that would otherwise mean
+  opening every file to read its first line, and querying from outside tau. WAL
+  mode, so a reader can run while a session is being appended to.
+- It is a satellite. The binary does not import it, so nothing is linked into
+  `tau` unless a program asks for it, and the driver is pure Go — `CGO_ENABLED=0`
+  still holds.
+- `coding.Options.Repo` lets an embedder supply any `session.Repo`. Nil is
+  still JSONL files under `~/.tau/sessions`, which is what the binary uses.
+- `session.Index`, `session.NewID` and `session.EntriesToFork` are now exported.
+  They are the reusable half of implementing a backend — label last-write-wins,
+  the leaf derived from the entries, the fork prefix rules — and a second
+  backend restating them in its own idiom would be a second set of answers to
+  drift apart. Entries are stored as the bytes they arrived as and replayed
+  through the same decoder, so the two backends cannot disagree about what a
+  session means.
+
 ## [0.29.0] - 2026-08-10
 
 - `/settings` opens a menu, the way Pi's does. Enter flips a toggle, or opens a

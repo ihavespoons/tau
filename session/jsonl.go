@@ -19,7 +19,7 @@ type JSONLStorage struct {
 	mu     sync.RWMutex
 	path   string
 	header Header
-	ix     *index
+	ix     *Index
 	// soft records recoverable problems found while loading — unknown entry
 	// types or message roles. The entries are kept; these explain what was not
 	// understood.
@@ -84,7 +84,7 @@ func CreateJSONL(path string, opts CreateOptions) (*JSONLStorage, error) {
 	if err := os.WriteFile(path, append(line, '\n'), 0o644); err != nil {
 		return nil, errorf(CodeStorage, err, "failed to create session %s", path)
 	}
-	return &JSONLStorage{path: path, header: header, ix: newIndex()}, nil
+	return &JSONLStorage{path: path, header: header, ix: NewIndex()}, nil
 }
 
 // OpenJSONL reads an existing session file, migrating it in place if it was
@@ -133,7 +133,7 @@ func openJSONL(path string, rewriteOnMigrate bool) (*JSONLStorage, error) {
 		}
 	}
 
-	s := &JSONLStorage{path: path, ix: newIndex(), migrated: changed}
+	s := &JSONLStorage{path: path, ix: NewIndex(), migrated: changed}
 	sawHeader := false
 	for i, line := range lines {
 		if !sawHeader {
@@ -150,7 +150,7 @@ func openJSONL(path string, rewriteOnMigrate bool) (*JSONLStorage, error) {
 			}
 			s.soft = append(s.soft, errorf(CodeInvalidEntry, err, "%s line %d", path, i+1))
 		}
-		s.ix.addLoaded(entry)
+		s.ix.AddLoaded(entry)
 	}
 	if !sawHeader {
 		return nil, errorf(CodeInvalidSession, nil, "invalid session file %s: missing session header", path)
@@ -294,32 +294,32 @@ func (s *JSONLStorage) Metadata(context.Context) (Metadata, error) {
 func (s *JSONLStorage) LeafID(context.Context) (*string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ix.leaf()
+	return s.ix.Leaf()
 }
 
 func (s *JSONLStorage) SetLeafID(_ context.Context, leafID *string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if leafID != nil {
-		if _, ok := s.ix.get(*leafID); !ok {
+		if _, ok := s.ix.Get(*leafID); !ok {
 			return errorf(CodeNotFound, nil, "entry %s not found", *leafID)
 		}
 	}
 	entry := &LeafEntry{
-		EntryBase: EntryBase{ID: s.ix.createEntryID(), ParentID: s.ix.leafID, Timestamp: Now()},
+		EntryBase: EntryBase{ID: s.ix.CreateEntryID(), ParentID: s.ix.Head(), Timestamp: Now()},
 		TargetID:  leafID,
 	}
 	if err := s.appendLine(entry); err != nil {
 		return err
 	}
-	s.ix.add(entry)
+	s.ix.Add(entry)
 	return nil
 }
 
 func (s *JSONLStorage) CreateEntryID(context.Context) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.ix.createEntryID(), nil
+	return s.ix.CreateEntryID(), nil
 }
 
 func (s *JSONLStorage) AppendEntry(_ context.Context, entry Entry) error {
@@ -328,48 +328,48 @@ func (s *JSONLStorage) AppendEntry(_ context.Context, entry Entry) error {
 	if err := s.appendLine(entry); err != nil {
 		return err
 	}
-	s.ix.add(entry)
+	s.ix.Add(entry)
 	return nil
 }
 
 func (s *JSONLStorage) GetEntry(_ context.Context, id string) (Entry, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ix.get(id)
+	return s.ix.Get(id)
 }
 
 func (s *JSONLStorage) FindEntries(_ context.Context, entryType string) []Entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ix.find(entryType)
+	return s.ix.Find(entryType)
 }
 
 func (s *JSONLStorage) Label(_ context.Context, id string) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ix.label(id)
+	return s.ix.Label(id)
 }
 
 func (s *JSONLStorage) SessionName(context.Context) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ix.sessionName()
+	return s.ix.SessionName()
 }
 
 func (s *JSONLStorage) Stats(context.Context) Stats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ix.stats()
+	return s.ix.Stats()
 }
 
 func (s *JSONLStorage) PathToRootOrCompaction(_ context.Context, leafID *string) ([]Entry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ix.pathToRootOrCompaction(leafID)
+	return s.ix.PathToRootOrCompaction(leafID)
 }
 
 func (s *JSONLStorage) Entries(_ context.Context, opts *CursorOptions) []Entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ix.slice(opts)
+	return s.ix.Slice(opts)
 }

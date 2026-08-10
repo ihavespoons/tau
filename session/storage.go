@@ -93,37 +93,49 @@ type Storage interface {
 	Entries(ctx context.Context, opts *CursorOptions) []Entry
 }
 
-// index maintains the in-memory view shared by all storage implementations:
-// entry lookup, label state, and the current leaf.
-type index struct {
+// Index maintains the in-memory view every storage backend answers from: entry
+// lookup, label state, and the current leaf.
+//
+// It is exported because it is the reusable half of implementing Storage. A
+// backend supplies durability — a file, a table, a network — and the semantics
+// here stay identical across all of them: label last-write-wins, the leaf
+// derived from the entries themselves, the path walk that stops at a
+// compaction. A second backend reimplementing those in its own idiom would be a
+// second set of answers to drift apart.
+type Index struct {
 	entries []Entry
 	byID    map[string]Entry
 	labels  map[string]string
 	leafID  *string
 }
 
-func newIndex() *index {
-	return &index{byID: map[string]Entry{}, labels: map[string]string{}}
+// NewIndex returns an empty index for a backend to fill.
+func NewIndex() *Index {
+	return &Index{byID: map[string]Entry{}, labels: map[string]string{}}
 }
 
-func (ix *index) add(e Entry) {
+// Head is the current leaf without the existence check Leaf makes, which is
+// what a new entry takes as its parent: the leaf it is about to become the
+// child of has just been indexed, so there is nothing yet to verify.
+func (ix *Index) Head() *string { return ix.leafID }
+
+// Add indexes an entry that was just appended.
+func (ix *Index) Add(e Entry) {
 	ix.entries = append(ix.entries, e)
 	ix.byID[e.Base().ID] = e
 	ix.updateLabel(e)
 	ix.leafID = leafIDAfterEntry(e)
 }
 
-// addLoaded indexes an entry read from storage. Unlike add it does not touch
-// label state until the whole file is read, because label semantics are
-// last-write-wins across the file.
-func (ix *index) addLoaded(e Entry) {
+// AddLoaded indexes an entry read back from storage during open.
+func (ix *Index) AddLoaded(e Entry) {
 	ix.entries = append(ix.entries, e)
 	ix.byID[e.Base().ID] = e
 	ix.updateLabel(e)
 	ix.leafID = leafIDAfterEntry(e)
 }
 
-func (ix *index) updateLabel(e Entry) {
+func (ix *Index) updateLabel(e Entry) {
 	l, ok := e.(*LabelEntry)
 	if !ok {
 		return
@@ -138,7 +150,7 @@ func (ix *index) updateLabel(e Entry) {
 // createEntryID mints a short id from the random tail of a uuidv7. The v7
 // prefix is time-derived and nearly constant between calls, so the entropy
 // must come from the end.
-func (ix *index) createEntryID() string {
+func (ix *Index) CreateEntryID() string {
 	for i := 0; i < 100; i++ {
 		u, err := uuid.NewV7()
 		if err != nil {
@@ -156,7 +168,7 @@ func (ix *index) createEntryID() string {
 	return uuid.NewString()
 }
 
-func (ix *index) leaf() (*string, error) {
+func (ix *Index) Leaf() (*string, error) {
 	if ix.leafID != nil {
 		if _, ok := ix.byID[*ix.leafID]; !ok {
 			return nil, errorf(CodeInvalidSession, nil, "entry %s not found", *ix.leafID)
@@ -165,12 +177,12 @@ func (ix *index) leaf() (*string, error) {
 	return ix.leafID, nil
 }
 
-func (ix *index) get(id string) (Entry, bool) {
+func (ix *Index) Get(id string) (Entry, bool) {
 	e, ok := ix.byID[id]
 	return e, ok
 }
 
-func (ix *index) find(entryType string) []Entry {
+func (ix *Index) Find(entryType string) []Entry {
 	var out []Entry
 	for _, e := range ix.entries {
 		if e.EntryType() == entryType {
@@ -180,12 +192,12 @@ func (ix *index) find(entryType string) []Entry {
 	return out
 }
 
-func (ix *index) label(id string) (string, bool) {
+func (ix *Index) Label(id string) (string, bool) {
 	l, ok := ix.labels[id]
 	return l, ok
 }
 
-func (ix *index) sessionName() (string, bool) {
+func (ix *Index) SessionName() (string, bool) {
 	for i := len(ix.entries) - 1; i >= 0; i-- {
 		if info, ok := ix.entries[i].(*SessionInfoEntry); ok {
 			if name := strings.TrimSpace(info.Name); name != "" {
@@ -197,7 +209,7 @@ func (ix *index) sessionName() (string, bool) {
 	return "", false
 }
 
-func (ix *index) stats() Stats {
+func (ix *Index) Stats() Stats {
 	var s Stats
 	for _, e := range ix.entries {
 		var usage *ai.Usage
@@ -229,7 +241,7 @@ func (ix *index) stats() Stats {
 // returning entries root-first. A compaction with a retained tail is a
 // self-contained checkpoint and stops the walk immediately; otherwise the walk
 // continues back to the compaction's first kept entry.
-func (ix *index) pathToRootOrCompaction(leafID *string) ([]Entry, error) {
+func (ix *Index) PathToRootOrCompaction(leafID *string) ([]Entry, error) {
 	if leafID == nil {
 		return nil, nil
 	}
@@ -268,7 +280,7 @@ func (ix *index) pathToRootOrCompaction(leafID *string) ([]Entry, error) {
 	return path, nil
 }
 
-func (ix *index) slice(opts *CursorOptions) []Entry {
+func (ix *Index) Slice(opts *CursorOptions) []Entry {
 	start := 0
 	if opts != nil {
 		start = opts.AfterEntrySeq

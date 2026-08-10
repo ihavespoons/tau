@@ -91,7 +91,7 @@ func (r *JSONLRepo) dirFor(cwd string) string {
 func (r *JSONLRepo) Create(_ context.Context, opts CreateSessionOptions) (*Session, error) {
 	id := opts.ID
 	if id == "" {
-		id = newSessionID()
+		id = NewID()
 	}
 	createdAt := Now()
 	path := filepath.Join(r.dirFor(opts.Cwd), sessionFileName(createdAt, id))
@@ -178,7 +178,7 @@ func (r *JSONLRepo) Fork(ctx context.Context, source Metadata, opts CreateSessio
 	if err != nil {
 		return nil, err
 	}
-	entries, err := entriesToFork(ctx, src.Storage(), fork)
+	entries, err := EntriesToFork(ctx, src.Storage(), fork)
 	if err != nil {
 		return nil, err
 	}
@@ -205,8 +205,13 @@ func (r *JSONLRepo) Fork(ctx context.Context, source Metadata, opts CreateSessio
 	return dst, nil
 }
 
-// entriesToFork selects the entries a fork copies.
-func entriesToFork(ctx context.Context, storage Storage, fork ForkOptions) ([]Entry, error) {
+// EntriesToFork selects the entries a fork copies.
+//
+// Exported for the same reason Index is: the rules here — "at" keeps the target
+// entry, "before" requires a user message and takes its parent, and either way
+// the walk stops at a compaction — are session semantics, not file semantics. A
+// second backend restating them would be a second thing to get right.
+func EntriesToFork(ctx context.Context, storage Storage, fork ForkOptions) ([]Entry, error) {
 	if fork.EntryID == "" {
 		return storage.Entries(ctx, nil), nil
 	}
@@ -228,7 +233,8 @@ func entriesToFork(ctx context.Context, storage Storage, fork ForkOptions) ([]En
 	return storage.PathToRootOrCompaction(ctx, leafID)
 }
 
-func newSessionID() string {
+// NewID mints a session id: a UUIDv7, so ids sort by creation time.
+func NewID() string {
 	if u, err := uuid.NewV7(); err == nil {
 		return u.String()
 	}
