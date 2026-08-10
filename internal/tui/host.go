@@ -136,6 +136,87 @@ func (h *host) SelectModel(ctx context.Context) (string, error) {
 	return "Switched to " + m.Provider + "/" + m.ID, nil
 }
 
+// SelectScopedModels opens the checklist of models the model-cycling shortcut
+// moves between.
+//
+// Ticking everything and ticking nothing both mean "no scope" and clear the
+// setting, which is what Pi does too. The alternative for the everything case
+// would be writing a thousand explicit patterns into settings.json to describe
+// the default.
+func (h *host) SelectScopedModels(ctx context.Context) (string, error) {
+	all := h.cs.AvailableModels()
+	if len(all) == 0 {
+		return "", errors.New("no models are configured")
+	}
+
+	inCycle := make(map[string]bool, len(all))
+	for _, m := range h.cs.CycleModels() {
+		inCycle[m.Provider+"/"+m.ID] = true
+	}
+
+	opts := make([]extension.SelectOption, 0, len(all))
+	checked := make([]bool, 0, len(all))
+	for i := range all {
+		id := all[i].Provider + "/" + all[i].ID
+		opts = append(opts, extension.SelectOption{Label: id, Value: id})
+		checked = append(checked, inCycle[id])
+	}
+
+	picked, ok, err := h.bridge.multiSelect(ctx, extension.SelectRequest{
+		Title:   "Models to cycle through",
+		Options: opts,
+	}, checked, func(o extension.SelectOption) string {
+		provider, _, _ := strings.Cut(o.Value, "/")
+		return provider
+	}, h.scopedModelHints())
+	if err != nil || !ok {
+		return "", err
+	}
+
+	return h.cs.SetScopedModels(ctx, scopedPatterns(opts, picked))
+}
+
+// scopedPatterns turns a checklist result into the patterns to save.
+//
+// Ticking everything and ticking nothing both mean "no scope" and yield nil,
+// which clears the setting. Writing out a pattern per model to describe the
+// default would put a thousand lines in settings.json to say nothing.
+//
+// Otherwise the rows are written in display order, because that is the order
+// the cycling shortcut walks them in — the order is part of the answer.
+func scopedPatterns(opts []extension.SelectOption, picked []int) []string {
+	if len(picked) == 0 || len(picked) == len(opts) {
+		return nil
+	}
+	out := make([]string, 0, len(picked))
+	for _, i := range picked {
+		out = append(out, opts[i].Value)
+	}
+	return out
+}
+
+// scopedModelHints advertises the checklist's keys under the list.
+func (h *host) scopedModelHints() string {
+	var parts []string
+	if k := keyLabel(h.keys, keybindings.SelectConfirm); k != "" {
+		parts = append(parts, k+" save")
+	}
+	for _, a := range []struct {
+		b     keybindings.Binding
+		label string
+	}{
+		{keybindings.AppModelsToggleProvider, "provider"},
+		{keybindings.AppModelsEnableAll, "all"},
+		{keybindings.AppModelsClearAll, "none"},
+		{keybindings.AppModelsReorderUp, "reorder"},
+	} {
+		if k := keyLabel(h.keys, a.b); k != "" {
+			parts = append(parts, k+" "+a.label)
+		}
+	}
+	return "space toggles · " + strings.Join(parts, " · ")
+}
+
 // NewSession starts a fresh session in the same directory.
 func (h *host) NewSession(ctx context.Context) (string, error) {
 	if err := h.cs.StartSession(ctx); err != nil {

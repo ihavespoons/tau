@@ -4,6 +4,18 @@ All notable changes to tau are recorded here. Versions follow
 [semantic versioning](https://semver.org/); the `0.x` series is pre-1.0, so
 minor bumps may still change behaviour.
 
+## [0.25.0] - 2026-08-10
+
+- `/scoped-models` opens a checklist. Space ticks a model, `ctrl+p` ticks a
+  whole provider, `ctrl+a` and `ctrl+x` tick everything and nothing,
+  `alt+↑`/`alt+↓` reorder — the order is the order cycling walks — and Enter
+  saves. Typing patterns still works and is still the only headless form.
+- Ticking everything and ticking nothing both clear the setting rather than
+  writing a pattern per model, which would put the whole catalog into
+  settings.json to describe the default.
+- Reordering refuses to run while a filter is up: "up" would mean the previous
+  visible row while the swap happened between rows that are not adjacent.
+
 ## [0.24.1] - 2026-08-10
 
 - `ctrl+l` opens the model picker, which until now needed `/model` typed out.

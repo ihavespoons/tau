@@ -215,3 +215,34 @@ func TestChecklistViewShowsBoxesAndCount(t *testing.T) {
 		t.Errorf("the count is missing:\n%s", out)
 	}
 }
+
+func TestScopedPatterns(t *testing.T) {
+	opts := []extension.SelectOption{
+		{Value: "anthropic/claude-opus-5"},
+		{Value: "anthropic/claude-sonnet-5"},
+		{Value: "openai/gpt-5.2"},
+	}
+
+	// Everything and nothing both mean "no scope": writing a pattern per model
+	// to describe the default would put the whole catalog in settings.json.
+	if got := scopedPatterns(opts, []int{0, 1, 2}); got != nil {
+		t.Errorf("ticking everything = %v, want nil", got)
+	}
+	if got := scopedPatterns(opts, nil); got != nil {
+		t.Errorf("ticking nothing = %v, want nil", got)
+	}
+
+	// A real subset is written in display order, which is the order the
+	// cycling shortcut walks.
+	got := scopedPatterns(opts, []int{2, 0})
+	want := []string{"openai/gpt-5.2", "anthropic/claude-opus-5"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got %v, want %v", got, want)
+			break
+		}
+	}
+}

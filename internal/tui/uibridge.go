@@ -188,6 +188,31 @@ func (b *uiBridge) selectWith(ctx context.Context, req extension.SelectRequest, 
 	return res.Index, res.Action, nil
 }
 
+// multiSelect opens a checklist and returns the rows that were ticked, in
+// display order, plus whether the user committed rather than cancelled.
+//
+// It is internal for the same reason selectWith is: an extension has no way to
+// say what a group is, and the checklist's group key would have nothing to act
+// on.
+func (b *uiBridge) multiSelect(ctx context.Context, req extension.SelectRequest, checked []bool, groupOf func(extension.SelectOption) string, hint string) ([]int, bool, error) {
+	reply := newReply()
+	d := &multiSelectDialog{
+		baseDialog: baseDialog{reply: reply, heading: req.Title, message: req.Message},
+		options:    req.Options,
+		checked:    checked,
+		visible:    b.rows(),
+		groupOf:    groupOf,
+		hint:       hint,
+	}
+	d.refilter()
+
+	res, err := b.ask(ctx, d, reply)
+	if err != nil {
+		return nil, false, err
+	}
+	return res.Indices, res.OK, nil
+}
+
 // Input implements extension.UI.
 func (b *uiBridge) Input(ctx context.Context, req extension.InputRequest) (string, error) {
 	reply := newReply()

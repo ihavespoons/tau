@@ -9,9 +9,8 @@ dependencies.
 > Pi v0.82.1. The interactive agent, all ten wire APIs, session trees, Pi
 > import, the extension system, themes, keybindings, skills, prompt templates,
 > the package manager, HTML export/share and the full slash-command set are in;
-> the TUI polish pass is still landing. `/settings` and `/scoped-models` are
-> typed commands here rather than Pi's toggle menus — the pickers come with
-> that pass.
+> the TUI polish pass is still landing. `/settings` is a typed command here
+> rather than Pi's toggle menu — that picker is still to come.
 >
 > **tau does not ask before it acts.** It edits files and runs shell commands
 > without a confirmation prompt. Run it on a clean git tree or in a scratch
@@ -401,10 +400,15 @@ directory tau has not trusted must not be written to on a one-line command.
 Keys tau does not model are kept in the file and reported as unread rather than
 rejected — an extension may own them.
 
-`/scoped-models` narrows the set `ctrl+p` cycles through:
+`/scoped-models` narrows the set `ctrl+p` cycles through. On its own it opens a
+checklist: space ticks a model, `ctrl+p` ticks a whole provider, `ctrl+a` and
+`ctrl+x` tick everything and nothing, `alt+↑`/`alt+↓` reorder — the order is the
+order cycling walks — and Enter saves. Ticking everything and ticking nothing
+both mean "no scope", so both put the whole catalog back.
+
+Patterns still work, and are the only form that works headless:
 
 ```
-/scoped-models                                 # the current set
 /scoped-models anthropic/* openai/gpt-5.2      # patterns, saved to settings
 /scoped-models all                             # back to the whole catalog
 ```

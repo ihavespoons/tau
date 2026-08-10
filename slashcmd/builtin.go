@@ -164,6 +164,8 @@ type Interactive interface {
 	NavigateTree(ctx context.Context) (string, error)
 	// SelectForkPoint opens the fork picker and forks at the choice.
 	SelectForkPoint(ctx context.Context) (string, error)
+	// SelectScopedModels opens the checklist of models to cycle through.
+	SelectScopedModels(ctx context.Context) (string, error)
 }
 
 // RegisterBuiltins adds every built-in command to the registry.
@@ -287,7 +289,7 @@ func RegisterBuiltins(r *Registry, host Host) {
 				r.Register(New(info, nil))
 				break
 			}
-			r.Register(New(info, scopedModelsRun(scoper)))
+			r.Register(New(info, scopedModelsRun(scoper, ui)))
 		case "changelog":
 			if log == nil {
 				r.Register(New(info, nil))
@@ -430,16 +432,20 @@ func cutFold(s, prefix string) (string, bool) {
 	return s[len(prefix):], true
 }
 
-// scopedModelsRun serves /scoped-models: no argument reports the cycle set,
-// patterns replace it, and "all" or "reset" clears it.
+// scopedModelsRun serves /scoped-models: patterns replace the cycle set, "all"
+// or "reset" clears it, and no argument opens the checklist — or reports the
+// set when there is no interface to open one in.
 //
-// Pi opens a multi-select for this. tau's picker is a later phase; the command
-// is the honest headless shape of the same feature, and typing patterns is
-// faster than ticking boxes when you already know what you want.
-func scopedModelsRun(scoper ModelScoper) func(context.Context, string) (Result, error) {
+// Typing patterns stays supported alongside the picker: a glob says what you
+// mean in one line, and it is the only form that works headless.
+func scopedModelsRun(scoper ModelScoper, ui Interactive) func(context.Context, string) (Result, error) {
 	return func(ctx context.Context, args string) (Result, error) {
 		args = strings.TrimSpace(args)
 		if args == "" {
+			if ui != nil {
+				out, err := ui.SelectScopedModels(ctx)
+				return Result{Output: out}, err
+			}
 			return Result{Output: scoper.ScopedModels()}, nil
 		}
 		var patterns []string
