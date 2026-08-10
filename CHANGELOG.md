@@ -4,6 +4,20 @@ All notable changes to tau are recorded here. Versions follow
 [semantic versioning](https://semver.org/); the `0.x` series is pre-1.0, so
 minor bumps may still change behaviour.
 
+## [0.24.0] - 2026-08-10
+
+- The session picker acts on the highlighted row: `ctrl+s` flips the order,
+  `ctrl+p` shows full paths, `ctrl+r` renames, `ctrl+d` deletes after a
+  confirmation, and `ctrl+backspace` deletes while the filter is empty.
+- `ctrl+backspace` and `ctrl+h` are now understood as one key. A terminal sends
+  the same byte for both, so Pi's `ctrl+backspace` defaults could never have
+  fired — nothing tau receives is ever spelled that way.
+- `app.session.new`, `.resume`, `.tree` and `.fork` are dispatched, so binding
+  them works. They ship unbound and run the matching slash command.
+- Deleting the session you are in is refused rather than half-done, and a
+  session is renamed by appending to its own file — so the name survives being
+  read by Pi.
+
 ## [0.23.0] - 2026-08-10
 
 - `!` runs a prompt in your shell instead of sending it to the model, and the

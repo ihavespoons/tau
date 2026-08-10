@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ihavespoons/tau/extension"
+	"github.com/ihavespoons/tau/keybindings"
 )
 
 // Messages the bridge posts into the Bubble Tea loop.
@@ -143,12 +144,35 @@ func (b *uiBridge) Confirm(ctx context.Context, req extension.ConfirmRequest) (b
 
 // Select implements extension.UI.
 func (b *uiBridge) Select(ctx context.Context, req extension.SelectRequest) (int, error) {
+	idx, _, err := b.selectWith(ctx, req, selectActions{})
+	return idx, err
+}
+
+// selectActions registers keys that close the picker and report themselves,
+// so the caller can act on the highlighted row and open it again.
+type selectActions struct {
+	// on fires whatever the filter contains.
+	on []keybindings.Binding
+	// onEmptyQuery fires only while the filter is empty, which lets a
+	// destructive key share a chord with a text-editing one.
+	onEmptyQuery []keybindings.Binding
+	// hint is drawn under the list to advertise them.
+	hint string
+}
+
+// selectWith is Select with per-row actions. It is internal: extensions get
+// the plain pick-one-thing form, because an extension has no way to say what a
+// key should do to a row it did not build.
+func (b *uiBridge) selectWith(ctx context.Context, req extension.SelectRequest, acts selectActions) (int, keybindings.Binding, error) {
 	reply := newReply()
 	d := &selectDialog{
-		baseDialog: baseDialog{reply: reply, heading: req.Title, message: req.Message},
-		options:    req.Options,
-		filterable: req.Filterable,
-		visible:    b.rows(),
+		baseDialog:        baseDialog{reply: reply, heading: req.Title, message: req.Message},
+		options:           req.Options,
+		filterable:        req.Filterable,
+		visible:           b.rows(),
+		actions:           acts.on,
+		emptyQueryActions: acts.onEmptyQuery,
+		hint:              acts.hint,
 	}
 	d.refilter()
 	if req.Initial > 0 && req.Initial < len(d.matches) {
@@ -156,12 +180,12 @@ func (b *uiBridge) Select(ctx context.Context, req extension.SelectRequest) (int
 	}
 	res, err := b.ask(ctx, d, reply)
 	if err != nil {
-		return -1, err
+		return -1, "", err
 	}
 	if !res.OK {
-		return -1, nil
+		return -1, "", nil
 	}
-	return res.Index, nil
+	return res.Index, res.Action, nil
 }
 
 // Input implements extension.UI.

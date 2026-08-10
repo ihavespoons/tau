@@ -17,6 +17,14 @@ type dialogResult struct {
 	Text string
 	// OK is false when the user cancelled.
 	OK bool
+	// Action names the binding that closed the dialog, when it was closed by
+	// one of the actions the caller registered rather than by choosing.
+	//
+	// Actions close the dialog rather than acting inside it. Opening a confirm
+	// or an input from a dialog's own key handler would nest one modal inside
+	// another while the asking goroutine is parked on the first one's reply —
+	// which is the deadlock this design exists to avoid.
+	Action keybindings.Binding
 }
 
 // dialog is a modal that owns the keyboard while it is open.
@@ -180,6 +188,15 @@ type selectDialog struct {
 	visible int
 	// matches indexes options that pass the filter.
 	matches []int
+	// actions are bindings that close the dialog and report themselves, so the
+	// caller can act on the highlighted row and reopen. Nil for the plain
+	// pick-one-thing case, which is every extension's use of it.
+	actions []keybindings.Binding
+	// emptyQueryActions only fire while the filter is empty, which is how a
+	// destructive key can share a chord with a text-editing one.
+	emptyQueryActions []keybindings.Binding
+	// hint is drawn under the list to advertise the actions.
+	hint string
 }
 
 func (d *selectDialog) refilter() {
@@ -215,6 +232,28 @@ func (d *selectDialog) key(msg tea.KeyMsg, km *keybindings.Manager) bool {
 	}
 
 	key := keyID(msg)
+
+	// Actions are checked before navigation: a chord bound to one here was
+	// chosen deliberately for this list.
+	if len(d.matches) > 0 {
+		for _, b := range d.actions {
+			if bound(km, key, b) {
+				d.closeWithAction(b)
+				return true
+			}
+		}
+		// An action that only fires on an empty filter can share a chord with
+		// a text-editing key without ever eating a keystroke meant for it.
+		if d.filter == "" {
+			for _, b := range d.emptyQueryActions {
+				if bound(km, key, b) {
+					d.closeWithAction(b)
+					return true
+				}
+			}
+		}
+	}
+
 	switch {
 	case bound(km, key, keybindings.SelectCancel):
 		d.close(dialogResult{Index: -1})
@@ -245,6 +284,18 @@ func (d *selectDialog) key(msg tea.KeyMsg, km *keybindings.Manager) bool {
 		}
 	}
 	return false
+}
+
+// closeWithAction reports the highlighted row together with the key that was
+// pressed on it, so the caller can act and reopen.
+func (d *selectDialog) closeWithAction(b keybindings.Binding) {
+	idx := d.matches[d.cursor]
+	d.close(dialogResult{
+		Index:  idx,
+		Text:   d.options[idx].Value,
+		OK:     true,
+		Action: b,
+	})
 }
 
 // move walks the cursor by n rows, stopping at either end rather than wrapping:
@@ -288,6 +339,9 @@ func (d *selectDialog) view(width int, theme Theme) []string {
 	}
 	if len(d.matches) > d.visible {
 		out = append(out, theme.Dim.Render(counter(d.cursor+1, len(d.matches))))
+	}
+	if d.hint != "" {
+		out = append(out, theme.Dim.Render("  "+d.hint))
 	}
 	return out
 }

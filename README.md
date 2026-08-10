@@ -338,9 +338,17 @@ ring. The ring outlives a submission, so text cut from one prompt can be yanked
 into the next. `ctrl+g` opens the prompt in `$VISUAL` or `$EDITOR` and adopts
 whatever comes back — as one undoable edit, so `ctrl+-` takes it back.
 
+The session picker (`/resume`) acts on the highlighted row: `ctrl+s` flips the
+order, `ctrl+p` shows full paths, `ctrl+r` renames, and `ctrl+d` deletes after
+a confirmation. Every one of them closes the picker, does the thing, and opens
+it again on a fresh listing. `ctrl+backspace` also deletes, but only while the
+filter is empty — with nothing typed there is no text for backspace to remove,
+which is what makes the key safe to reuse there.
+
 Three caveats. `shift+enter` needs a terminal that distinguishes it from
 `enter`, which most do not report to tau yet; `ctrl+j` is the one that always
-works. Image paste is still landing, so binding `pasteImage` does nothing today.
+works. `ctrl+backspace` and `ctrl+h` are the same key: a terminal sends one
+byte for both, so binding them to different actions binds one key twice. Image paste is still landing, so binding `pasteImage` does nothing today.
 And `pageUp`, `pageDown` and `copy` are deliberately left alone: tau prints into
 the terminal's own scrollback rather than taking over the screen, so scrolling
 and selection belong to the terminal, and claiming those keys would take them

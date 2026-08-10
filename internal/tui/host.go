@@ -14,6 +14,7 @@ import (
 	"github.com/ihavespoons/tau/config"
 	"github.com/ihavespoons/tau/extension"
 	"github.com/ihavespoons/tau/keybindings"
+	"github.com/ihavespoons/tau/session"
 )
 
 // host implements slashcmd.Interactive: the built-in commands that need to
@@ -143,39 +144,162 @@ func (h *host) NewSession(ctx context.Context) (string, error) {
 	return "Started a new session: " + h.cs.Path, nil
 }
 
-// ResumeSession opens the session picker.
-func (h *host) ResumeSession(ctx context.Context) (string, error) {
-	metas, err := h.cs.ListSessions(ctx)
-	if err != nil {
-		return "", err
-	}
-	if len(metas) == 0 {
-		return "", errors.New("no previous sessions in this directory")
-	}
+// sessionView is the session picker's display state, which survives the picker
+// being closed and reopened by an action.
+type sessionView struct {
+	// oldestFirst reverses the listing, which is newest-first by default.
+	oldestFirst bool
+	// showPath draws the whole path rather than just the file name.
+	showPath bool
+}
 
-	opts := make([]extension.SelectOption, 0, len(metas))
+// order sorts a listing for display. ListSessions returns newest first, so
+// this only has to reverse it.
+func (v sessionView) order(metas []session.Metadata) []session.Metadata {
+	if !v.oldestFirst {
+		return metas
+	}
+	out := make([]session.Metadata, len(metas))
+	for i, m := range metas {
+		out[len(metas)-1-i] = m
+	}
+	return out
+}
+
+// options renders the rows.
+func (v sessionView) options(metas []session.Metadata, current string) []extension.SelectOption {
+	out := make([]extension.SelectOption, 0, len(metas))
 	for _, m := range metas {
 		label := m.CreatedAt
 		if label == "" {
 			label = filepath.Base(m.Path)
 		}
 		desc := filepath.Base(m.Path)
-		if m.Path == h.cs.Path {
+		if v.showPath {
+			desc = m.Path
+		}
+		if m.Path == current {
 			desc += "  (current)"
 		}
-		opts = append(opts, extension.SelectOption{Label: label, Description: desc, Value: m.Path})
+		out = append(out, extension.SelectOption{Label: label, Description: desc, Value: m.Path})
 	}
+	return out
+}
 
-	idx, err := h.bridge.Select(ctx, extension.SelectRequest{
-		Title: "Resume session", Options: opts, Filterable: true,
+// ResumeSession opens the session picker.
+//
+// The picker closes on every action and is opened again with the listing
+// re-read, which is what lets a key delete or rename the highlighted session:
+// the confirm and the prompt happen after this one has closed, never nested
+// inside its key handler while a goroutine is parked on its reply.
+func (h *host) ResumeSession(ctx context.Context) (string, error) {
+	var view sessionView
+
+	for {
+		metas, err := h.cs.ListSessions(ctx)
+		if err != nil {
+			return "", err
+		}
+		if len(metas) == 0 {
+			return "", errors.New("no previous sessions in this directory")
+		}
+		metas = view.order(metas)
+
+		idx, action, err := h.bridge.selectWith(ctx, extension.SelectRequest{
+			Title:      "Resume session",
+			Options:    view.options(metas, h.cs.Path),
+			Filterable: true,
+		}, selectActions{
+			on: []keybindings.Binding{
+				keybindings.AppSessionToggleSort,
+				keybindings.AppSessionTogglePath,
+				keybindings.AppSessionRename,
+				keybindings.AppSessionDelete,
+			},
+			onEmptyQuery: []keybindings.Binding{keybindings.AppSessionDeleteNoninvasive},
+			hint:         h.sessionHints(),
+		})
+		if err != nil || idx < 0 {
+			return "", err
+		}
+
+		switch action {
+		case "":
+			if err := h.cs.SwitchSession(ctx, metas[idx]); err != nil {
+				return "", err
+			}
+			return "Resumed " + h.cs.Path, nil
+
+		case keybindings.AppSessionToggleSort:
+			view.oldestFirst = !view.oldestFirst
+		case keybindings.AppSessionTogglePath:
+			view.showPath = !view.showPath
+
+		case keybindings.AppSessionRename:
+			if err := h.renameFromPicker(ctx, metas[idx]); err != nil {
+				return "", err
+			}
+		case keybindings.AppSessionDelete, keybindings.AppSessionDeleteNoninvasive:
+			if err := h.deleteFromPicker(ctx, metas[idx]); err != nil {
+				return "", err
+			}
+		}
+	}
+}
+
+// sessionHints advertises the picker's actions under the list, using whatever
+// keys they are actually bound to.
+func (h *host) sessionHints() string {
+	var parts []string
+	for _, a := range []struct {
+		b     keybindings.Binding
+		label string
+	}{
+		{keybindings.AppSessionToggleSort, "sort"},
+		{keybindings.AppSessionTogglePath, "path"},
+		{keybindings.AppSessionRename, "rename"},
+		{keybindings.AppSessionDelete, "delete"},
+	} {
+		if k := keyLabel(h.keys, a.b); k != "" {
+			parts = append(parts, k+" "+a.label)
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+// renameFromPicker asks for a name and applies it. A cancelled prompt is not an
+// error: backing out of a rename is a normal thing to do.
+func (h *host) renameFromPicker(ctx context.Context, meta session.Metadata) error {
+	name, err := h.bridge.Input(ctx, extension.InputRequest{
+		Title:       "Rename session",
+		Message:     filepath.Base(meta.Path),
+		Placeholder: "a name you will recognize",
 	})
-	if err != nil || idx < 0 {
-		return "", err
+	if err != nil || strings.TrimSpace(name) == "" {
+		return nil
 	}
-	if err := h.cs.SwitchSession(ctx, metas[idx]); err != nil {
-		return "", err
+	if _, err := h.cs.RenameSession(ctx, meta, strings.TrimSpace(name)); err != nil {
+		h.bridge.Notify(extension.Notification{Level: extension.NotifyError, Message: err.Error()})
 	}
-	return "Resumed " + h.cs.Path, nil
+	return nil
+}
+
+// deleteFromPicker confirms before removing a session, because there is no
+// undo and the file is the only copy.
+func (h *host) deleteFromPicker(ctx context.Context, meta session.Metadata) error {
+	ok, err := h.bridge.Confirm(ctx, extension.ConfirmRequest{
+		Title:        "Delete session",
+		Message:      meta.Path + "\n\nThis cannot be undone.",
+		ConfirmLabel: "Delete",
+		CancelLabel:  "Keep",
+	})
+	if err != nil || !ok {
+		return nil
+	}
+	if _, err := h.cs.DeleteSession(ctx, meta); err != nil {
+		h.bridge.Notify(extension.Notification{Level: extension.NotifyError, Message: err.Error()})
+	}
+	return nil
 }
 
 // NavigateTree opens the branch picker and moves to the choice.

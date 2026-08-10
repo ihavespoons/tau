@@ -66,7 +66,7 @@ func ParseKey(id string) (Key, bool) {
 			if k.Name == "" || isModifier(k.Name) {
 				return Key{}, false
 			}
-			return k, true
+			return k.normalize(), true
 		}
 
 		mod := canonicalModifier(part)
@@ -112,6 +112,23 @@ func isModifier(name string) bool {
 		return true
 	}
 	return false
+}
+
+// normalize folds spellings that name the same byte onto one key.
+//
+// A terminal sends BS (0x08) for ctrl+backspace and DEL (0x7f) for backspace,
+// and the TUI layer reports the first as "ctrl+h" — they are the same byte, so
+// a binding written either way has to answer to the same press. Pi's defaults
+// spell it "ctrl+backspace"; without this, nothing a terminal sends could ever
+// trigger one.
+//
+// The two therefore name one binding, and binding them to different actions
+// binds the same key twice.
+func (k Key) normalize() Key {
+	if k.Ctrl && k.Name == "backspace" {
+		k.Name = "h"
+	}
+	return k
 }
 
 func canonicalBase(name string) string {
