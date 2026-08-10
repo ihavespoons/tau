@@ -516,7 +516,7 @@ func TestRendererRoundTrip(t *testing.T) {
 	if h.Renders("entry", "") {
 		t.Fatal("an undeclared renderer was reported")
 	}
-	lines, err := h.Render(context.Background(), "message", 80, map[string]any{"role": "assistant"})
+	lines, err := h.Render(context.Background(), "message", "assistant", 80, map[string]any{"role": "assistant"})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -528,7 +528,7 @@ func TestRendererRoundTrip(t *testing.T) {
 func TestSlowRendererFallsBack(t *testing.T) {
 	h, _, _ := loadDemo(t, "slowrender")
 	start := time.Now()
-	_, err := h.Render(context.Background(), "message", 80, map[string]any{})
+	_, err := h.Render(context.Background(), "message", "assistant", 80, map[string]any{})
 	if err == nil {
 		t.Fatal("a slow renderer blocked the draw path instead of failing")
 	}
@@ -826,3 +826,54 @@ func (s *stubRuntime) Model() *ai.Model {
 func (s *stubRuntime) SetModel(*ai.Model) error                     { return nil }
 func (s *stubRuntime) ThinkingLevel() ai.ModelThinkingLevel         { return "off" }
 func (s *stubRuntime) SetThinkingLevel(ai.ModelThinkingLevel) error { return nil }
+
+// The keyboard and the transcript reach a subprocess extension through the same
+// in-process registry a Go extension registers into: the host's factory installs
+// forwarding closures, so there is one lookup and neither surface is reachable
+// by a path the other is not.
+func TestSubprocessShortcutAndRendererReachTheRunner(t *testing.T) {
+	_, r, cap := loadDemo(t, "")
+
+	if !r.HasShortcut("ctrl+d") {
+		t.Fatal("a declared shortcut is invisible to the runner")
+	}
+	if !r.DispatchShortcut(context.Background(), "ctrl+d") {
+		t.Fatal("the runner did not claim a declared key")
+	}
+	cap.waitForLog(t, "shortcut fired")
+
+	rend := r.MessageRendererFor("assistant")
+	if rend == nil {
+		t.Fatal("a declared message renderer is invisible to the runner")
+	}
+	lines, err := rend.Render(context.Background(), ai.AssistantMessage{}, 72)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if len(lines) != 1 || !strings.Contains(lines[0], "width 72") {
+		t.Fatalf("lines = %v", lines)
+	}
+	if got := r.MessageRendererFor("user"); got != nil {
+		t.Error("a renderer declared for assistant messages claimed a user message")
+	}
+	if got := r.EntryRendererFor("compaction"); got != nil {
+		t.Error("an entry renderer appeared that nothing declared")
+	}
+}
+
+// A renderer that overruns its deadline reports an error rather than lines, so
+// the caller falls back to built-in rendering instead of stalling the draw path.
+func TestSlowSubprocessRendererFailsThroughTheRunner(t *testing.T) {
+	_, r, _ := loadDemo(t, "slowrender")
+	rend := r.MessageRendererFor("assistant")
+	if rend == nil {
+		t.Fatal("no renderer registered")
+	}
+	start := time.Now()
+	if _, err := rend.Render(context.Background(), ai.AssistantMessage{}, 80); err == nil {
+		t.Fatal("a slow renderer blocked the draw path instead of failing")
+	}
+	if elapsed := time.Since(start); elapsed > GracePeriod+2*time.Second {
+		t.Fatalf("waited %s to give up on a renderer", elapsed)
+	}
+}

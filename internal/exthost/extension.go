@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/ihavespoons/tau/ai"
 	"github.com/ihavespoons/tau/extension"
 	"github.com/ihavespoons/tau/extension/wire"
+	"github.com/ihavespoons/tau/session"
 )
 
 // Extension presents the running subprocess as an ordinary extension.
@@ -33,6 +35,9 @@ func (h *Host) factory(api *extension.API) error {
 	}
 	for _, d := range h.decl.Shortcuts {
 		h.registerShortcut(api, d)
+	}
+	for _, d := range h.decl.Renderers {
+		h.registerRenderer(api, d)
 	}
 	for _, d := range h.decl.Flags {
 		api.RegisterFlag(extension.Flag{
@@ -422,9 +427,35 @@ func (h *Host) registerShortcut(api *extension.API, d wire.ShortcutDecl) {
 	})
 }
 
+// registerRenderer forwards a declared renderer into the in-process registry,
+// so the transcript consults subprocess and Go renderers through the same
+// lookup and neither can be reached by a path the other cannot.
+//
+// The selector is re-derived from the value being drawn rather than taken from
+// the declaration: a renderer that claims everything ("" selector) still has
+// to tell the extension which role or entry type it was handed.
+func (h *Host) registerRenderer(api *extension.API, d wire.RendererDecl) {
+	switch d.Kind {
+	case "message":
+		api.RegisterMessageRenderer(extension.MessageRenderer{
+			Role: d.Selector,
+			Render: func(ctx context.Context, m ai.Message, width int) ([]string, error) {
+				return h.Render(ctx, "message", m.Role(), width, m)
+			},
+		})
+	case "entry":
+		api.RegisterEntryRenderer(extension.EntryRenderer{
+			EntryType: d.Selector,
+			Render: func(ctx context.Context, e session.Entry, width int) ([]string, error) {
+				return h.Render(ctx, "entry", e.EntryType(), width, e)
+			},
+		})
+	}
+}
+
 // Render asks a declared renderer for its lines. An empty result means the
 // extension declined and the host's own rendering applies.
-func (h *Host) Render(ctx context.Context, kind string, width int, payload any) ([]string, error) {
+func (h *Host) Render(ctx context.Context, kind, selector string, width int, payload any) ([]string, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -437,7 +468,7 @@ func (h *Host) Render(ctx context.Context, kind string, width int, payload any) 
 
 	id := h.nextRequestID()
 	res, err := h.request(ctx, id, wire.Render{
-		Type: wire.FrameRender, ID: id, Kind: kind, Width: width, Payload: raw,
+		Type: wire.FrameRender, ID: id, Kind: kind, Selector: selector, Width: width, Payload: raw,
 	})
 	if err != nil {
 		return nil, err

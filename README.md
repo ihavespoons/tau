@@ -215,6 +215,26 @@ make tau launch what is in it.
 A `.ts` or `.js` file runs under the host shim; an executable runs directly.
 tau never installs anything on an extension's behalf.
 
+### Keys and renderers
+
+An extension can bind a key and draw a message, and both work the same whether
+it is compiled in or spawned:
+
+- **Shortcuts** — `Ctrl+C` and `Esc` always reach tau, because interrupt and
+  abort are the two ways out of a wedged turn. Every other key is claimable,
+  including tau's own bindings, so an extension can take over `Ctrl+P`; a
+  shortcut bound to a bare letter will shadow typing. When two extensions bind
+  the same key the first loaded wins.
+- **Message renderers** — a renderer draws a transcript message in place of
+  tau's own rendering. Returning no lines means *no opinion* and the built-in
+  rendering runs, so hiding a message takes a blank line rather than an empty
+  list. A renderer is called on the draw path with a 100 ms deadline; one that
+  fails or overruns it falls back to the built-in rendering instead of stalling
+  the transcript.
+
+Entry renderers can be registered and reach a subprocess extension, but nothing
+calls them yet: tau's transcript is built from messages, not session entries.
+
 ### Pi extensions
 
 Pi's TypeScript extensions run on tau unmodified, through a shim you install

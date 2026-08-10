@@ -631,3 +631,104 @@ func TestAllEventTypesCovered(t *testing.T) {
 		seen[e] = true
 	}
 }
+
+// --- shortcuts and renderers ---
+
+func TestShortcutFirstBindingWins(t *testing.T) {
+	var ran []string
+	r := newRunner(t,
+		ext("first", func(a *API) {
+			a.RegisterShortcut(Shortcut{Key: "ctrl+g", Handler: func(context.Context, *Context) error {
+				ran = append(ran, "first")
+				return nil
+			}})
+		}),
+		ext("second", func(a *API) {
+			a.RegisterShortcut(Shortcut{Key: "ctrl+g", Handler: func(context.Context, *Context) error {
+				ran = append(ran, "second")
+				return nil
+			}})
+		}),
+	)
+
+	if !r.HasShortcut("ctrl+g") {
+		t.Fatal("a registered key is not reported as bound")
+	}
+	if r.HasShortcut("ctrl+q") {
+		t.Fatal("an unbound key is reported as bound")
+	}
+	if !r.DispatchShortcut(context.Background(), "ctrl+g") {
+		t.Fatal("dispatch did not claim a bound key")
+	}
+	if !reflect.DeepEqual(ran, []string{"first"}) {
+		t.Errorf("ran = %v, want only the first binding", ran)
+	}
+	if r.DispatchShortcut(context.Background(), "ctrl+q") {
+		t.Error("dispatch claimed an unbound key")
+	}
+}
+
+// A shortcut with no handler is a declaration, not a binding: claiming the key
+// would swallow it into a no-op the user cannot see.
+func TestShortcutWithoutHandlerDoesNotClaimTheKey(t *testing.T) {
+	r := newRunner(t, ext("decl", func(a *API) {
+		a.RegisterShortcut(Shortcut{Key: "ctrl+g", Description: "documented but inert"})
+	}))
+	if r.HasShortcut("ctrl+g") || r.DispatchShortcut(context.Background(), "ctrl+g") {
+		t.Error("a handler-less shortcut claimed its key")
+	}
+}
+
+func TestShortcutFailureIsReportedNotFatal(t *testing.T) {
+	r := newRunner(t, ext("broken", func(a *API) {
+		a.RegisterShortcut(Shortcut{Key: "ctrl+g", Handler: func(context.Context, *Context) error {
+			return errors.New("boom")
+		}})
+	}))
+	if !r.DispatchShortcut(context.Background(), "ctrl+g") {
+		t.Fatal("a failing handler must still claim its key")
+	}
+	errs := r.Errors()
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "boom") {
+		t.Fatalf("errors = %v, want the handler failure", errs)
+	}
+}
+
+func TestMessageRendererSelection(t *testing.T) {
+	draw := func(string) func(context.Context, ai.Message, int) ([]string, error) {
+		return func(context.Context, ai.Message, int) ([]string, error) { return nil, nil }
+	}
+	r := newRunner(t, ext("draw", func(a *API) {
+		a.RegisterMessageRenderer(MessageRenderer{Role: "assistant", Render: draw("assistant")})
+		a.RegisterMessageRenderer(MessageRenderer{Render: draw("any")})
+	}))
+
+	if got := r.MessageRendererFor("assistant"); got == nil || got.Role != "assistant" {
+		t.Errorf("assistant renderer = %+v, want the role-specific one", got)
+	}
+	// The catch-all claims what the specific renderer declined.
+	if got := r.MessageRendererFor("user"); got == nil || got.Role != "" {
+		t.Errorf("user renderer = %+v, want the catch-all", got)
+	}
+	if r.EntryRendererFor("compaction") != nil {
+		t.Error("a message renderer answered an entry lookup")
+	}
+}
+
+func TestRendererWithoutRenderFuncIsSkipped(t *testing.T) {
+	r := newRunner(t, ext("draw", func(a *API) {
+		a.RegisterMessageRenderer(MessageRenderer{Role: "assistant"})
+		a.RegisterMessageRenderer(MessageRenderer{
+			Role:   "assistant",
+			Render: func(context.Context, ai.Message, int) ([]string, error) { return []string{"x"}, nil },
+		})
+	}))
+	got := r.MessageRendererFor("assistant")
+	if got == nil || got.Render == nil {
+		t.Fatalf("renderer = %+v, want the one that can draw", got)
+	}
+	lines, _ := got.Render(context.Background(), userMsg("hi"), 80)
+	if !reflect.DeepEqual(lines, []string{"x"}) {
+		t.Errorf("lines = %v", lines)
+	}
+}

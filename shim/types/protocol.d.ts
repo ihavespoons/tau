@@ -346,6 +346,14 @@ export interface Render {
 	 */
 	kind: string;
 	/**
+	 * Selector is the message role or entry type being rendered. It repeats
+	 * what the payload already says because an extension may register several
+	 * renderers of the same kind, and picking between them by re-deriving the
+	 * selector from the payload would make each side's idea of "the role"
+	 * have to agree.
+	 */
+	selector?: string;
+	/**
 	 * Width is the available column count.
 	 */
 	width: number;

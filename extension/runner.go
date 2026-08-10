@@ -164,6 +164,102 @@ func (r *Runner) Commands() []Command {
 	return out
 }
 
+// Shortcuts returns every registered key binding, in load order.
+func (r *Runner) Shortcuts() []Shortcut {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []Shortcut
+	for _, a := range r.apis {
+		out = append(out, a.Shortcuts()...)
+	}
+	return out
+}
+
+// HasShortcut reports whether any extension binds key, without running
+// anything. A UI that must decide on its own event loop whether to hand a key
+// to an extension asks this first and dispatches off the loop, so a handler
+// never blocks the draw path.
+func (r *Runner) HasShortcut(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, a := range r.apis {
+		for _, s := range a.Shortcuts() {
+			if s.Key == key && s.Handler != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// DispatchShortcut runs the first shortcut bound to key and reports whether
+// one claimed it. Two extensions binding the same key is not an error — the
+// first loaded wins and the second is simply never reached, which is the same
+// rule Pi applies and the only one that does not depend on load order being
+// stable.
+//
+// A handler's failure is reported through the error sink like any other, so a
+// broken shortcut is visible without taking the keyboard down with it.
+func (r *Runner) DispatchShortcut(ctx context.Context, key string) bool {
+	r.mu.Lock()
+	apis := append([]*API{}, r.apis...)
+	r.mu.Unlock()
+
+	for _, a := range apis {
+		for _, s := range a.Shortcuts() {
+			if s.Key != key || s.Handler == nil {
+				continue
+			}
+			ec := r.newContext()
+			if err := safely(func() error { return s.Handler(ctx, ec) }); err != nil {
+				r.reportError(&Error{Extension: a.name, Event: EventType("shortcut:" + key), Err: err})
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// MessageRendererFor returns the first renderer claiming this message role, or
+// nil. Role matching is exact; a renderer registered with no role claims every
+// message.
+func (r *Runner) MessageRendererFor(role string) *MessageRenderer {
+	r.mu.Lock()
+	apis := append([]*API{}, r.apis...)
+	r.mu.Unlock()
+
+	for _, a := range apis {
+		for _, m := range a.MessageRenderers() {
+			if m.Render == nil {
+				continue
+			}
+			if m.Role == "" || m.Role == role {
+				return &m
+			}
+		}
+	}
+	return nil
+}
+
+// EntryRendererFor returns the first renderer claiming this entry type, or nil.
+func (r *Runner) EntryRendererFor(entryType string) *EntryRenderer {
+	r.mu.Lock()
+	apis := append([]*API{}, r.apis...)
+	r.mu.Unlock()
+
+	for _, a := range apis {
+		for _, e := range a.EntryRenderers() {
+			if e.Render == nil {
+				continue
+			}
+			if e.EntryType == "" || e.EntryType == entryType {
+				return &e
+			}
+		}
+	}
+	return nil
+}
+
 // newContext issues a context stamped with the current generation.
 func (r *Runner) newContext() *Context {
 	return &Context{runner: r, generation: atomic.LoadUint64(&r.generation)}

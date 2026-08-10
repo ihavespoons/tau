@@ -8,6 +8,7 @@ import (
 
 	"github.com/ihavespoons/tau/agent"
 	"github.com/ihavespoons/tau/ai"
+	"github.com/ihavespoons/tau/session"
 )
 
 // Factory is an extension's entry point. It registers handlers and resources
@@ -115,6 +116,25 @@ type Shortcut struct {
 	Handler     func(ctx context.Context, ec *Context) error
 }
 
+// MessageRenderer draws a transcript message in place of tau's own rendering.
+//
+// Role narrows what it claims — "assistant", "user", or empty for every
+// message. Returning no lines means "no opinion" and the built-in rendering
+// runs instead; an extension that wants a message to occupy no space has to
+// say so with a blank line. Collapsing the two would leave an extension no way
+// to decline a message it does not recognise.
+type MessageRenderer struct {
+	Role   string
+	Render func(ctx context.Context, m ai.Message, width int) ([]string, error)
+}
+
+// EntryRenderer draws a session entry. EntryType narrows what it claims; empty
+// claims every entry.
+type EntryRenderer struct {
+	EntryType string
+	Render    func(ctx context.Context, e session.Entry, width int) ([]string, error)
+}
+
 // Flag is an extension-registered CLI flag.
 type Flag struct {
 	Name        string
@@ -145,6 +165,9 @@ type API struct {
 	shortcuts []Shortcut
 	flags     []Flag
 	flagVals  map[string]any
+
+	msgRenderers   []MessageRenderer
+	entryRenderers []EntryRenderer
 
 	// runtime is bound by the Runner once the host is ready; action methods
 	// before binding return ErrNotBound.
@@ -287,6 +310,20 @@ func (a *API) RegisterShortcut(s Shortcut) {
 	a.shortcuts = append(a.shortcuts, s)
 }
 
+// RegisterMessageRenderer adds a transcript renderer for messages.
+func (a *API) RegisterMessageRenderer(r MessageRenderer) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.msgRenderers = append(a.msgRenderers, r)
+}
+
+// RegisterEntryRenderer adds a transcript renderer for session entries.
+func (a *API) RegisterEntryRenderer(r EntryRenderer) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.entryRenderers = append(a.entryRenderers, r)
+}
+
 // RegisterFlag adds a CLI flag.
 func (a *API) RegisterFlag(f Flag) {
 	a.mu.Lock()
@@ -320,6 +357,20 @@ func (a *API) Shortcuts() []Shortcut {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return append([]Shortcut{}, a.shortcuts...)
+}
+
+// MessageRenderers returns the message renderers this extension registered.
+func (a *API) MessageRenderers() []MessageRenderer {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]MessageRenderer{}, a.msgRenderers...)
+}
+
+// EntryRenderers returns the entry renderers this extension registered.
+func (a *API) EntryRenderers() []EntryRenderer {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]EntryRenderer{}, a.entryRenderers...)
 }
 
 // Flags returns the flags this extension declared.

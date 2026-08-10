@@ -287,6 +287,12 @@ type Render struct {
 	ID   string    `json:"id"`
 	// Kind is "message" or "entry".
 	Kind string `json:"kind"`
+	// Selector is the message role or entry type being rendered. It repeats
+	// what the payload already says because an extension may register several
+	// renderers of the same kind, and picking between them by re-deriving the
+	// selector from the payload would make each side's idea of "the role"
+	// have to agree.
+	Selector string `json:"selector,omitempty"`
 	// Width is the available column count.
 	Width int `json:"width"`
 	// Payload is the message or entry to render.

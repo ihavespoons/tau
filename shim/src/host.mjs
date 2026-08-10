@@ -403,7 +403,12 @@ export async function run({ entry, input = process.stdin, output, onExit } = {})
 	}
 
 	async function handleRender(frame) {
-		const renderer = registry.renderers.find((r) => r.kind === frame.kind);
+		// An extension may register several renderers of one kind, each
+		// claiming a different role or entry type. Matching on kind alone
+		// would hand every message to whichever was registered first.
+		const sel = frame.selector ?? "";
+		const claims = (r) => r.kind === frame.kind && (!r.selector || r.selector === sel);
+		const renderer = registry.renderers.find(claims);
 		if (!renderer) {
 			conn.reply(frame.id, { lines: [] });
 			return;

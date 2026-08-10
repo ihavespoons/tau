@@ -249,6 +249,22 @@ func (a *app) onKey(msg tea.KeyMsg) tea.Cmd {
 		a.ctrlCArmed = false
 	}
 
+	// Ctrl+C and Esc always reach tau: interrupt and abort are the two ways out
+	// of a wedged turn, and an extension that could swallow them could make the
+	// agent unstoppable. Every other key is claimable — including the built-in
+	// bindings below, so an extension can rebind Ctrl+P — and a shortcut bound
+	// to a bare letter will shadow typing, which is the extension's business.
+	if msg.Type != tea.KeyCtrlC && msg.Type != tea.KeyEsc {
+		if key := msg.String(); a.cs.Extensions != nil && a.cs.Extensions.HasShortcut(key) {
+			// Handlers run off the Update goroutine: a shortcut that opens a
+			// dialog would otherwise wait on the loop that has to draw it.
+			return func() tea.Msg {
+				a.cs.Extensions.DispatchShortcut(context.Background(), key)
+				return nil
+			}
+		}
+	}
+
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		return a.onInterrupt()
@@ -394,11 +410,49 @@ func (a *app) onCommandDone(msg commandMsg) tea.Cmd {
 	return nil
 }
 
+// renderTimeout bounds one renderer round trip.
+//
+// A renderer is the single place an extension handler runs on the Update
+// goroutine, against the standing rule. Transcript lines have to be emitted in
+// the order the messages arrived, and rendering off the loop would let a fast
+// later message overtake a slow earlier one — a scrambled transcript is worse
+// than a bounded pause, so the pause is bounded instead.
+const renderTimeout = 100 * time.Millisecond
+
+// renderMessage draws m through an extension renderer, or returns nil when no
+// extension has an opinion about it.
+//
+// No lines means no opinion, not "draw nothing": an extension that wants a
+// message to occupy no space says so with a blank line. A renderer that fails
+// or overruns its deadline is treated the same way, so a broken extension
+// costs a fallback to tau's own rendering rather than a hole in the transcript.
+func (a *app) renderMessage(m ai.Message) []string {
+	if a.cs.Extensions == nil || m == nil {
+		return nil
+	}
+	r := a.cs.Extensions.MessageRendererFor(m.Role())
+	if r == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), renderTimeout)
+	defer cancel()
+	lines, err := r.Render(ctx, m, a.width)
+	if err != nil {
+		a.notice = "renderer failed: " + err.Error()
+		return nil
+	}
+	return lines
+}
+
 // replayTranscript re-prints a restored conversation after /new or /resume, so
 // the scrollback matches the context the model actually has.
 func (a *app) replayTranscript() []string {
 	var out []string
 	for _, m := range a.cs.RestoredMessages() {
+		if lines := a.renderMessage(m); len(lines) > 0 {
+			out = append(out, lines...)
+			continue
+		}
 		switch msg := m.(type) {
 		case ai.UserMessage:
 			out = append(out, a.rend.user(msg.Content.String())...)
@@ -434,6 +488,10 @@ func (a *app) onAgentEvent(ev agent.Event) tea.Cmd {
 	case agent.EventMessageEnd:
 		a.streamText.Reset()
 		a.streamThnk.Reset()
+		if lines := a.renderMessage(ev.Message); len(lines) > 0 {
+			a.emit(append(lines, ""))
+			return nil
+		}
 		if m, ok := ev.Message.(ai.AssistantMessage); ok {
 			if lines := a.rend.assistant(m); len(lines) > 0 {
 				a.emit(append(lines, ""))
