@@ -4,6 +4,29 @@ All notable changes to tau are recorded here. Versions follow
 [semantic versioning](https://semver.org/); the `0.x` series is pre-1.0, so
 minor bumps may still change behaviour.
 
+## [0.31.0] - 2026-08-10
+
+- `tau server`: a supervisor that owns several agents at once and hands them out
+  over HTTP. Each is a `tau --mode rpc` subprocess, addressable by id and
+  outliving any single connection — which that mode alone cannot be, being one
+  agent on one pair of pipes.
+- List, start, inspect, stop, one-shot RPC, and a server-sent-events stream of
+  everything an agent emits. Responses are matched to their command by id, so
+  commands in flight together cannot receive each other's replies.
+- A slow event subscriber is dropped rather than allowed to block: a stalled
+  HTTP client must not be able to freeze a running turn.
+- A process that dies without being asked is recorded as failed with the reason,
+  and its record stays listed — a client asking what happened to an agent needs
+  it still in the answer. Agents go down with the server, because leaving them
+  writing to session files with nothing left to address them is worse.
+- **The socket is full control of every agent it owns.** tau does not ask before
+  editing a file or running a shell command, so anything that can reach it runs
+  commands as you. It defaults to a Unix socket at mode 0600, and refuses to
+  start if a live server already holds it.
+- `rpc.Writer.EmitCommand` writes the client direction. tau only ever writes the
+  other three, but a supervisor driving tau needs the same framing and the same
+  lock, and a second encoder would be somewhere for the escaping to drift.
+
 ## [0.30.0] - 2026-08-10
 
 - A SQLite session backend, `storage/sqlite`. It exists for what one-file-per-

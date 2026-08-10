@@ -670,6 +670,35 @@ Entries are stored as the bytes they were written as and replayed through the
 same decoder and the same `session.Index` the file backend uses, so the two can
 never disagree about what a session means.
 
+## The server (experimental)
+
+`tau server` supervises several agents at once and hands them out over HTTP:
+
+```sh
+tau server                        # a Unix socket under ~/.tau/agent
+tau server -listen 127.0.0.1:7777 # or a port
+```
+
+```
+GET    /instances              list them
+POST   /instances              {"cwd": "...", "label": "..."} starts one
+GET    /instances/{id}         one record
+DELETE /instances/{id}         stop it
+POST   /instances/{id}/rpc     one command, one response
+GET    /instances/{id}/events  server-sent events for the whole stream
+```
+
+Each instance is a `tau --mode rpc` subprocess. That mode on its own is one
+agent on one pair of pipes for as long as you hold them; the server is many,
+each addressable by id and outliving any single connection — the shape an editor
+plugin or a deployment wants. Agents go down with the server, because leaving
+them writing to session files with nothing left to address them is worse.
+
+**The socket is full control of every agent it owns.** tau does not ask before
+editing a file or running a shell command, so anything that can reach the socket
+can run commands as you. It defaults to a Unix socket at mode 0600 for that
+reason. Think hard before `-listen` puts it on a port.
+
 ## MCP
 
 tau speaks the Model Context Protocol through a bundled extension. Configure

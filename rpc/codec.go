@@ -51,6 +51,12 @@ func (w *Writer) write(v any) {
 // Emit writes a response.
 func (w *Writer) Emit(res Response) { w.write(res) }
 
+// EmitCommand writes a command, which is the direction a client sends. tau
+// itself only ever writes the other three, but a supervisor driving tau needs
+// the same framing and the same lock, and a second encoder would be a second
+// place for the escaping rules to drift.
+func (w *Writer) EmitCommand(cmd Command) { w.write(cmd) }
+
 // EmitEvent writes an event.
 func (w *Writer) EmitEvent(ev Event) { w.write(ev) }
 

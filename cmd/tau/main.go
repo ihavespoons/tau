@@ -53,6 +53,8 @@ func run(args []string) error {
 			return listModels()
 		case "sessions":
 			return listSessions()
+		case "server":
+			return serverCmd(args[1:])
 		case "import":
 			return importCmd(args[1:])
 		case "install":
@@ -113,6 +115,7 @@ usage:
   tau logout [provider]  remove stored credentials
   tau models             list available models
   tau sessions           list sessions for this directory
+  tau server             supervise several agents over HTTP (experimental)
   tau install <source>   install a package (npm:, git:, or a local path)
   tau remove <source>    remove an installed package
   tau update [source]    update installed packages
